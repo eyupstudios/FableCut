@@ -15,6 +15,7 @@
    into ./media — the browser UI reloads instantly. Schema: see CLAUDE.md.
    ═══════════════════════════════════════════════════════════════════════════ */
 "use strict";
+require("./win-hide.js"); // no console windows for child processes on Windows (first, before any child_process reference)
 const http = require("http");
 const crypto = require("crypto");
 const fs = require("fs");

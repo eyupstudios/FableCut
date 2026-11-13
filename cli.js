@@ -9,6 +9,7 @@
    an update never touches it. FABLECUT_DATA_DIR still overrides.
    ═══════════════════════════════════════════════════════════════════════════ */
 "use strict";
+require("./win-hide.js"); // no console windows for child processes on Windows (first, before any child_process reference)
 
 const cmd = process.argv[2];
 

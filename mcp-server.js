@@ -14,6 +14,7 @@
            fablecut_scopes
    ═══════════════════════════════════════════════════════════════════════════ */
 "use strict";
+require("./win-hide.js"); // no console windows for child processes on Windows (first, before any child_process reference)
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
