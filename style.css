@@ -4640,3 +4640,6 @@ body.hosted .logo span { display: none; }
 @container (max-width: 900px) {
   #monitorRes { display: none; }
 }
+
+/* A MEKSUMMAT short's picture (framed in Fix clip): a note instead of its transform controls */
+.framed-by-fixclip p { margin: 8px 0 12px; line-height: 1.5; opacity: .85; }

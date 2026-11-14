@@ -6579,6 +6579,22 @@ function renderInspector(lite) {
     renderKfGraphsPanel();
     return;
   }
+  if (c.props && c.props.framedBy === "meksummat") {
+    /* A MEKSUMMAT short's picture: its framing (and trim) come from Fix clip, where you drag the 9:16 window over
+       the picture. Its Position / Scale keyframes would move the video the other way round, so they aren't shown
+       here (the clip is locked too); everything else - titles, sounds, stickers, music - goes on the other tracks. */
+    if (!lite) {
+      const hosted = document.body.classList.contains("hosted");
+      els.inspector.innerHTML = `<div class="insp-section framed-by-fixclip"><h3>Your short's picture</h3>
+        <p>Its framing and trim are set in <b>Fix clip</b>: drag the 9:16 window over the full picture there.
+        Titles, sounds, stickers and music you add here stay when you go back and change the framing.</p>
+        ${hosted ? `<button type="button" class="btn primary" data-fixclip>Change framing in Fix clip</button>` : ""}</div>`;
+      const b = els.inspector.querySelector("[data-fixclip]");
+      if (b) b.addEventListener("click", () => (window.__c1msg = window.__c1msg || []).push("back"));
+    }
+    renderKfGraphsPanel();
+    return;
+  }
   if (lite) { // during gestures, just refresh timing numbers if present
     const s = els.inspector.querySelector("[data-k=start]"), d = els.inspector.querySelector("[data-k=duration]");
     if (s) s.value = c.start.toFixed(2);
