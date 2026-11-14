@@ -439,7 +439,7 @@ body.track-size-s .clip.selected {
 
 .upper {
   display: grid;
-  grid-template-columns: var(--side-panel-w) minmax(0, 1fr) var(--side-panel-w);
+  grid-template-columns: var(--bin-w, var(--side-panel-w)) minmax(0, 1fr) var(--inspector-w, var(--side-panel-w));
   gap: 6px;
   min-height: 0;
 }
@@ -4508,3 +4508,135 @@ body { background: var(--bg); }
 .tracks-content, .timeline-scroll { background-color: var(--well); }
 .track:nth-child(even):not(.drop-hint) { background-color: #ffffff05; }   /* a drop target keeps its highlight */
 .insp-section { background: var(--panel-sub); border-radius: 6px; padding: 8px 10px; margin: 0 0 10px; }
+
+/* ── Resizable side panels (media bin / inspector) ── */
+.panel.bin,
+.panel.inspector {
+  position: relative;
+}
+
+.h-split {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: ew-resize;
+  z-index: 6;
+}
+
+.h-split.right { right: 0; }
+.h-split.left { left: 0; }
+
+.h-split::after {
+  content: "";
+  position: absolute;
+  top: 18%;
+  bottom: 18%;
+  left: 3px;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background .15s;
+}
+
+.h-split:hover::after,
+.h-split.dragging::after {
+  background: var(--accent);
+}
+
+.app.ws-color .h-split { display: none; }
+
+body.resizing-cols,
+body.resizing-cols * {
+  cursor: ew-resize !important;
+}
+
+/* ── Inside the MEKSUMMAT window (?host=meksummat): one top bar ── */
+body.hosted .logo span { display: none; }
+
+.host-back {
+  margin-right: 8px;
+  font-weight: 600;
+}
+
+.host-pop-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.job-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding-left: 10px;
+  padding-right: 12px;
+  max-width: 260px;
+}
+
+.job-pill .txt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job-pill .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-dim, #8a94a6);
+  flex: 0 0 auto;
+}
+
+.job-pill.busy .dot {
+  background: var(--accent);
+  animation: host-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes host-pulse { 50% { opacity: .35; } }
+
+.host-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 50;
+  min-width: 260px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
+}
+
+.job-pop .jp-title { font-weight: 600; margin-bottom: 4px; }
+.job-pop .jp-detail { opacity: .75; margin-bottom: 8px; white-space: normal; }
+.job-pop .jp-bar { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; margin-bottom: 10px; }
+.job-pop .jp-bar span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+.job-pop .jp-actions { display: flex; gap: 6px; }
+
+.host-menu { min-width: 190px; padding: 6px; }
+
+.host-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.host-menu-item:hover { background: var(--border); }
+
+.host-full.on { color: var(--accent); }
+
+/* A narrow monitor keeps its header on one row: the resolution readout (the canvas menus already say it) goes,
+   so the picture gets that height. */
+.panel.monitor { container-type: inline-size; }
+
+@container (max-width: 900px) {
+  #monitorRes { display: none; }
+}

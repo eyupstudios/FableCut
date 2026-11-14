@@ -556,7 +556,7 @@ const state = {
   silenceBusy: false,    // a Find is listening (the Inspector offers Cancel)
   beats: null,           // the beat Find beats heard (Inspector → Beats): {clipId, sig, a, grid, bpm, drop}, ticks on the timeline
   beatsBusy: false,      // Find beats is listening
-  trackSize: "l",        // s | m | l — timeline track density preset
+  trackSize: "m",        // s | m | l — timeline track density preset (m: a big preview, thumbnails kept)
   connected: false, exporting: false,
   rendering: false,      // fast (server/ffmpeg) export in progress
   guides: false,         // safe-area overlay on the monitor
@@ -19267,14 +19267,20 @@ window.addEventListener("resize", () => { state.dirtyTimeline = true; clampTimel
 /* ── Resizable upper / timeline split ── */
 const TL_H_KEY = "fablecut-timeline-h";
 const TL_H_MIN = 180;
-const UPPER_MIN = 140;
+/* The preview row never gets less than this: half the window (at least 260 px), so a big
+   timeline can't squeeze the preview away in a small or embedded window. */
+const UPPER_MIN_PX = 260, UPPER_MIN_SHARE = 0.5;
+function upperMin() {
+  const h = $("app").getBoundingClientRect().height;
+  return Math.max(UPPER_MIN_PX, Math.round(h * UPPER_MIN_SHARE));
+}
 function availableTimelineMax() {
   const app = $("app").getBoundingClientRect();
   const topbar = document.querySelector(".topbar")?.getBoundingClientRect();
   const topbarH = topbar ? topbar.height : 46;
   const split = 6;
   const gaps = 18; // three 6px flex gaps between four children
-  return Math.floor(app.height - topbarH - UPPER_MIN - split - gaps);
+  return Math.floor(app.height - topbarH - upperMin() - split - gaps);
 }
 window.addEventListener("keyup", (e) => {
   const k = e.key.toLowerCase();
@@ -19293,12 +19299,15 @@ function setTimelineHeight(px) {
   state.dirtyTimeline = true;
   return h;
 }
-/* Tall enough for the toolbar + ruler + every track row (no vertical overflow). */
+/* Tall enough for the toolbar + ruler + every track row (no vertical overflow) - but never more than
+   30 % of the window by default, so the preview stays the big thing (drag the split for more). */
+const TL_DEFAULT_SHARE = 0.3;
 function defaultTimelineHeight() {
   const tracksH = TRACKS.reduce((s, t) => s + t.h, 0);
   const toolbar = document.querySelector(".timeline-toolbar");
   const toolbarH = toolbar ? toolbar.getBoundingClientRect().height : 40;
-  return tracksH + RULER_H + toolbarH + 8;
+  const share = Math.round($("app").getBoundingClientRect().height * TL_DEFAULT_SHARE);
+  return Math.max(TL_H_MIN, Math.min(tracksH + RULER_H + toolbarH + 8, share));
 }
 function resetTimelineHeight() {
   const h = setTimelineHeight(defaultTimelineHeight());
@@ -19341,12 +19350,150 @@ function setTrackSize(size, { persist = true, fitPane = true } = {}) {
   }
 }
 function restoreDefaultLayout() {
-  setTrackSize("l", { persist: true, fitPane: false });
+  setTrackSize(DEFAULT_TRACK_SIZE, { persist: true, fitPane: false });
   resetTimelineHeight();
+  resetSidePanels();
 }
 function clampTimelineHeight() {
   const cur = $("timelinePanel")?.getBoundingClientRect().height;
   if (cur) setTimelineHeight(cur);
+  clampSidePanels();
+}
+
+/* ── Resizable media bin / inspector widths (remembered), the preview keeps a minimum width ── */
+const DEFAULT_TRACK_SIZE = "m";       // medium tracks: a big preview with thumbnails still on the clips
+const SIDE_KEYS = { bin: "fablecut-bin-w", inspector: "fablecut-inspector-w" };
+const SIDE_DEFAULT = 320, SIDE_MIN = 220, SIDE_MAX = 560, MONITOR_MIN = 360;
+function sideWidth(which) {
+  const v = getComputedStyle($("app")).getPropertyValue(which === "bin" ? "--bin-w" : "--inspector-w");
+  return parseFloat(v) || SIDE_DEFAULT;
+}
+function setSideWidth(which, px) {
+  const app = $("app").getBoundingClientRect().width;
+  const other = sideWidth(which === "bin" ? "inspector" : "bin");
+  const room = app - other - MONITOR_MIN - 24;            // 12 px padding + 2 gaps
+  const w = clamp(Math.round(px), SIDE_MIN, Math.max(SIDE_MIN, Math.min(SIDE_MAX, room)));
+  $("app").style.setProperty(which === "bin" ? "--bin-w" : "--inspector-w", w + "px");
+  return w;
+}
+function clampSidePanels() {
+  for (const k of ["bin", "inspector"]) setSideWidth(k, sideWidth(k));
+}
+function resetSidePanels() {
+  for (const k of ["bin", "inspector"]) {
+    localStorage.removeItem(SIDE_KEYS[k]);
+    setSideWidth(k, SIDE_DEFAULT);
+  }
+}
+function initSideSplits() {
+  for (const [which, sel, edge] of [["bin", ".panel.bin", "right"], ["inspector", ".panel.inspector", "left"]]) {
+    const panel = document.querySelector(sel);
+    if (!panel) continue;
+    const saved = parseFloat(localStorage.getItem(SIDE_KEYS[which]));
+    setSideWidth(which, saved > 0 ? saved : SIDE_DEFAULT);
+    const h = document.createElement("div");
+    h.className = `h-split ${edge}`;
+    h.setAttribute("role", "separator");
+    h.setAttribute("aria-orientation", "vertical");
+    h.title = "Drag to resize · double-click to reset";
+    panel.appendChild(h);
+    h.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      h.setPointerCapture(e.pointerId);
+      h.classList.add("dragging");
+      document.body.classList.add("resizing-panels", "resizing-cols");
+      const x0 = e.clientX, w0 = panel.getBoundingClientRect().width;
+      const onMove = (ev) => setSideWidth(which, w0 + (edge === "right" ? 1 : -1) * (ev.clientX - x0));
+      const onUp = () => {
+        h.releasePointerCapture(e.pointerId);
+        h.classList.remove("dragging");
+        document.body.classList.remove("resizing-panels", "resizing-cols");
+        h.removeEventListener("pointermove", onMove);
+        h.removeEventListener("pointerup", onUp);
+        localStorage.setItem(SIDE_KEYS[which], String(Math.round(sideWidth(which))));
+        state.dirtyTimeline = true;
+      };
+      h.addEventListener("pointermove", onMove);
+      h.addEventListener("pointerup", onUp);
+    });
+    h.addEventListener("dblclick", (e) => {
+      e.preventDefault();
+      localStorage.removeItem(SIDE_KEYS[which]);
+      setSideWidth(which, SIDE_DEFAULT);
+    });
+  }
+}
+
+/* ── Inside the MEKSUMMAT window (?host=meksummat): one top bar - Back, the project, the app's background-job
+   pill, a small menu (Reload / Open in browser), full screen, Export. Messages to the app go through
+   window.__c1msg (the app polls it); the app pushes its job status with window.__meksummatStatus(...). ── */
+function initHostBar() {
+  if (new URLSearchParams(location.search).get("host") !== "meksummat") return;
+  document.body.classList.add("hosted");
+  const send = (m) => { (window.__c1msg = window.__c1msg || []).push(m); };
+  const bar = document.querySelector(".topbar");
+  const right = bar && bar.querySelector(".topbar-right");
+  const exportBtn = $("btnExport");
+  if (!bar || !right || !exportBtn) return;
+  const mk = (tag, cls, html, title) => {
+    const el = document.createElement(tag);
+    if (cls) el.className = cls;
+    if (html != null) el.innerHTML = html;
+    if (title) el.title = title;
+    if (tag === "button") el.type = "button";
+    return el;
+  };
+  const back = mk("button", "btn ghost host-back", "‹ Back", "Back to the app (Alt+←)");
+  back.addEventListener("click", () => send("back"));
+  bar.insertBefore(back, bar.firstChild);
+
+  const pillWrap = mk("span", "host-pop-wrap");
+  const pill = mk("button", "btn tiny job-pill", '<span class="dot"></span><span class="txt">Ready</span>',
+    "Background jobs - click for details");
+  const pop = mk("div", "host-pop job-pop hidden");
+  pop.innerHTML = '<div class="jp-title">Ready</div><div class="jp-detail"></div>' +
+    '<div class="jp-bar"><span></span></div><div class="jp-actions"></div>';
+  pillWrap.append(pill, pop);
+
+  const menuWrap = mk("span", "host-pop-wrap");
+  const menuBtn = mk("button", "btn ghost host-menu-btn", "⋯", "More");
+  const menu = mk("div", "host-pop host-menu hidden");
+  const item = (label, fn) => { const b = mk("button", "host-menu-item", label); b.addEventListener("click", () => { menu.classList.add("hidden"); fn(); }); menu.appendChild(b); };
+  item("Reload the editor", () => location.reload());
+  item("Open in browser", () => send("external"));
+  menuWrap.append(menuBtn, menu);
+
+  const full = mk("button", "btn ghost host-full", "⛶", "Full screen (F11)");
+  full.addEventListener("click", () => send("fullscreen"));
+  for (const el of [pillWrap, menuWrap, full]) right.insertBefore(el, exportBtn);
+
+  const closeAll = () => { pop.classList.add("hidden"); menu.classList.add("hidden"); };
+  pill.addEventListener("click", (e) => { e.stopPropagation(); const open = pop.classList.contains("hidden"); closeAll(); pop.classList.toggle("hidden", !open); });
+  menuBtn.addEventListener("click", (e) => { e.stopPropagation(); const open = menu.classList.contains("hidden"); closeAll(); menu.classList.toggle("hidden", !open); });
+  document.addEventListener("click", (e) => { if (!pillWrap.contains(e.target) && !menuWrap.contains(e.target)) closeAll(); });
+
+  let last = "";
+  window.__meksummatStatus = (s) => {
+    s = s || {};
+    const key = JSON.stringify(s);
+    if (key === last) return;
+    last = key;
+    const busy = !!s.busy;
+    pill.classList.toggle("busy", busy);
+    pill.querySelector(".txt").textContent = s.short || (busy ? "Working…" : "Ready");
+    pop.querySelector(".jp-title").textContent = s.label || (busy ? "Working" : "Ready");
+    pop.querySelector(".jp-detail").textContent = s.detail || "";
+    const pct = Math.max(0, Math.min(1, Number(s.progress) || 0));
+    pop.querySelector(".jp-bar").classList.toggle("hidden", !busy);
+    pop.querySelector(".jp-bar span").style.width = (pct * 100).toFixed(1) + "%";
+    const acts = pop.querySelector(".jp-actions");
+    acts.innerHTML = "";
+    const a = (label, msg) => { const b = mk("button", "btn tiny", label); b.addEventListener("click", () => { closeAll(); send(msg); }); acts.appendChild(b); };
+    a("Open the Queue", "queue");
+    if (s.cancellable) a("Cancel", "cancel");
+  };
+  window.__meksummatFullscreen = (on) => { full.classList.toggle("on", !!on); full.title = on ? "Leave full screen (F11)" : "Full screen (F11)"; };
 }
 function initPanelSplit() {
   const handle = $("splitUpperTimeline");
@@ -20545,6 +20692,8 @@ for (const b of document.querySelectorAll("#wsSwitch [data-ws]"))
   b.addEventListener("click", () => setWorkspace(b.dataset.ws));
 
 initPanelSplit();
+initSideSplits();
+initHostBar();
 buildTrackDOM();
 rebuildClips();
 renderBin();
