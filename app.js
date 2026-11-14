@@ -7,7 +7,7 @@
 "use strict";
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
-const VIDEO_TRACK_COLORS = ["#4f8cff", "#7b6cff", "#ffd166", "#ff6b9d", "#45d9c2", "#f4a261", "#e76f51", "#a8dadc"];
+const VIDEO_TRACK_COLORS = ["#4f8cff", "#69BE28", "#ffd166", "#ff6b9d", "#45d9c2", "#f4a261", "#e76f51", "#a8dadc"];
 const AUDIO_TRACK_COLORS = ["#7ec249", "#5a9e3a", "#4a8a2f", "#3a7226", "#2d5a1e", "#8fbc5a", "#6b9e3a", "#4d7a28"];
 const MAX_TRACKS_PER_KIND = 16; // +V/+A and auto-grown A-tracks for multi-channel sources
 const DEFAULT_TRACK_DEFS = [
@@ -7328,7 +7328,7 @@ function drawKfGraph(cv, c, key) {
   if (y0 > 4 && y0 < H - 4) { g.moveTo(3, y0); g.lineTo(W - 3, y0); g.stroke(); }
 
   // interpolated curve (only the zoomed window)
-  g.strokeStyle = "#7b6cff";
+  g.strokeStyle = "#69BE28";
   g.lineWidth = 1.5;
   g.beginPath();
   const steps = Math.max(24, Math.floor(W));
@@ -8056,7 +8056,7 @@ function drawSourceFrame() {
       const bx = (W - bw) / 2, by = H * 0.66;
       ctx2d.fillStyle = "#2a2a33";
       ctx2d.fillRect(bx, by, bw, bh);
-      ctx2d.fillStyle = "#7b6cff";
+      ctx2d.fillStyle = "#69BE28";
       ctx2d.fillRect(bx, by, bw * clamp(t / dur, 0, 1), bh);
     }
   }
@@ -12242,7 +12242,7 @@ async function fetchSaved(kind) {
 const findTemplate = (id) => Tpl.findTemplate(id, savedLib.templates);
 const TEMPLATE_ICONS = {
   "Lower thirds": '<rect x="2" y="13" width="14" height="5" rx="1" fill="#ffd166"/><rect x="2" y="13" width="2" height="5" fill="#fff"/><rect x="6" y="15" width="7" height="1.4" rx=".7" fill="#111"/>',
-  "Logo animations": '<circle cx="12" cy="11" r="7" fill="none" stroke="#7b6cff" stroke-width="2.2"/><rect x="9" y="8" width="6" height="6" rx="1.5" fill="#ff7ac8"/>',
+  "Logo animations": '<circle cx="12" cy="11" r="7" fill="none" stroke="#69BE28" stroke-width="2.2"/><rect x="9" y="8" width="6" height="6" rx="1.5" fill="#ff7ac8"/>',
   Social: '<rect x="7" y="2.5" width="10" height="19" rx="2" fill="none" stroke="#22d3ee" stroke-width="2"/><rect x="9" y="8" width="6" height="2" rx="1" fill="#fff"/><rect x="9" y="12" width="4" height="1.5" rx=".7" fill="#fff"/>',
   Saved: '<path d="M6 3h12v18l-6-4-6 4z" fill="#ffd166"/>',
 };
@@ -14217,7 +14217,7 @@ window.addEventListener("keydown", (e) => {
    Enter to finish an open path. Item values with ◆ keys animate per value. */
 const SHAPE_PRESETS = {
   rect: { label: "Rectangle", item: { type: "rect", w: 420, h: 240, radius: 24, fill: "#ffd166" } },
-  ellipse: { label: "Ellipse", item: { type: "ellipse", w: 260, h: 260, fill: "#7b6cff" } },
+  ellipse: { label: "Ellipse", item: { type: "ellipse", w: 260, h: 260, fill: "#69BE28" } },
   polygon: { label: "Polygon", item: { type: "polygon", sides: 6, w: 260, h: 260, fill: "#22d3ee" } },
   star: { label: "Star", item: { type: "star", sides: 5, inner: 0.45, w: 280, h: 280, fill: "#ff7ac8" } },
   line: { label: "Line", item: { type: "line", points: [[-220, 0], [220, 0]], stroke: "#ffffff", strokeWidth: 10 } },
@@ -14263,7 +14263,7 @@ function addNull() {
    shape layer takes more items from its own Shape layer section). */
 const SHAPE_ICONS = {
   rect: '<rect x="3" y="6" width="18" height="12" rx="2" fill="#ffd166"/>',
-  ellipse: '<circle cx="12" cy="12" r="8" fill="#7b6cff"/>',
+  ellipse: '<circle cx="12" cy="12" r="8" fill="#69BE28"/>',
   polygon: '<polygon points="12,3 20,7.5 20,16.5 12,21 4,16.5 4,7.5" fill="#22d3ee"/>',
   star: '<polygon points="12,2.5 14.6,9 21.5,9.3 16.1,13.6 18,20.3 12,16.4 6,20.3 7.9,13.6 2.5,9.3 9.4,9" fill="#ff7ac8"/>',
   line: '<line x1="4" y1="18" x2="20" y2="6" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>',
