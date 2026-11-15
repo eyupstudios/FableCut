@@ -1,4 +1,4 @@
-/* ══════════ MEKSUMMAT Editor (FableCut, MIT) — MEKSUMMAT theme: navy #002244, silver #A5ACAF, lime #69BE28 ══════════ */
+/* ══════════ Create Summat Editor (FableCut, MIT) — Create Summat theme: navy #002244, silver #A5ACAF, lime #69BE28 ══════════ */
 :root {
   /* surfaces, darkest at the back: app → panels → header bars → controls */
   --bg: #001A33;
@@ -4551,7 +4551,7 @@ body.resizing-cols * {
   cursor: ew-resize !important;
 }
 
-/* ── Inside the MEKSUMMAT window (?host=meksummat): one top bar ── */
+/* ── Inside the Create Summat window (?host=createsummat): one top bar ── */
 body.hosted .logo span { display: none; }
 
 .host-back {
@@ -4641,5 +4641,5 @@ body.hosted .logo span { display: none; }
   #monitorRes { display: none; }
 }
 
-/* A MEKSUMMAT short's picture (framed in Fix clip): a note instead of its transform controls */
+/* A Create Summat short's picture (framed in Fix clip): a note instead of its transform controls */
 .framed-by-fixclip p { margin: 8px 0 12px; line-height: 1.5; opacity: .85; }

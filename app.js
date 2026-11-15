@@ -6579,8 +6579,8 @@ function renderInspector(lite) {
     renderKfGraphsPanel();
     return;
   }
-  if (c.props && c.props.framedBy === "meksummat") {
-    /* A MEKSUMMAT short's picture: its framing (and trim) come from Fix clip, where you drag the 9:16 window over
+  if (c.props && ["createsummat", "meksummat"].includes(c.props.framedBy)) {
+    /* A Create Summat short's picture: its framing (and trim) come from Fix clip, where you drag the 9:16 window over
        the picture. Its Position / Scale keyframes would move the video the other way round, so they aren't shown
        here (the clip is locked too); everything else - titles, sounds, stickers, music - goes on the other tracks. */
     if (!lite) {
@@ -19441,11 +19441,11 @@ function initSideSplits() {
   }
 }
 
-/* ── Inside the MEKSUMMAT window (?host=meksummat): one top bar - Back, the project, the app's background-job
+/* ── Inside the Create Summat window (?host=createsummat; the old ?host=meksummat still works): one top bar - Back, the project, the app's background-job
    pill, a small menu (Reload / Open in browser), full screen, Export. Messages to the app go through
-   window.__c1msg (the app polls it); the app pushes its job status with window.__meksummatStatus(...). ── */
+   window.__c1msg (the app polls it); the app pushes its job status with window.__createsummatStatus(...). ── */
 function initHostBar() {
-  if (new URLSearchParams(location.search).get("host") !== "meksummat") return;
+  if (!["createsummat", "meksummat"].includes(new URLSearchParams(location.search).get("host"))) return;
   document.body.classList.add("hosted");
   const send = (m) => { (window.__c1msg = window.__c1msg || []).push(m); };
   const bar = document.querySelector(".topbar");
@@ -19490,7 +19490,7 @@ function initHostBar() {
   document.addEventListener("click", (e) => { if (!pillWrap.contains(e.target) && !menuWrap.contains(e.target)) closeAll(); });
 
   let last = "";
-  window.__meksummatStatus = (s) => {
+  window.__createsummatStatus = window.__meksummatStatus = (s) => {
     s = s || {};
     const key = JSON.stringify(s);
     if (key === last) return;
@@ -19509,7 +19509,7 @@ function initHostBar() {
     a("Open the Queue", "queue");
     if (s.cancellable) a("Cancel", "cancel");
   };
-  window.__meksummatFullscreen = (on) => { full.classList.toggle("on", !!on); full.title = on ? "Leave full screen (F11)" : "Full screen (F11)"; };
+  window.__createsummatFullscreen = window.__meksummatFullscreen = (on) => { full.classList.toggle("on", !!on); full.title = on ? "Leave full screen (F11)" : "Full screen (F11)"; };
 }
 function initPanelSplit() {
   const handle = $("splitUpperTimeline");
