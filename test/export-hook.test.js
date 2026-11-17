@@ -71,3 +71,12 @@ test("a gate that fails means no export, not an un-gated one", async (t) => {
   const files = fs.existsSync(exportsDir) ? fs.readdirSync(exportsDir).filter((f) => /\.(mp4|mov|webm)$/.test(f)) : [];
   assert.deepEqual(files, [], "nothing un-gated in exports/");
 });
+
+test("the server says whether its exports go through the gate", async (t) => {
+  const dir = makeDataDir(t);
+  const { base } = await startServer(t, dir, { FABLECUT_EXPORT_HOOK: JSON.stringify([process.execPath, "-e", "0"]) });
+  assert.equal((await (await fetch(base + "/api/export/ffmpeg")).json()).gate, true);
+  const dir2 = makeDataDir(t);
+  const plain = await startServer(t, dir2, { FABLECUT_EXPORT_HOOK: "" });
+  assert.equal((await (await fetch(plain.base + "/api/export/ffmpeg")).json()).gate, false);
+});
