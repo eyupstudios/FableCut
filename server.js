@@ -174,6 +174,22 @@ function readBody(req) {
     req.on("error", reject);
   });
 }
+/* Create Summat's export gate (18 Nov): with FABLECUT_EXPORT_HOOK set (a JSON array: the command and its first
+ * arguments), every finished export is handed to that command as `<part file> <final file>`; it writes the final
+ * file (watermark / resolution rules) and removes the part. With FABLECUT_EXPORT_PRIVATE set, part files are
+ * written there, never in the exports folder - so the exports folder only ever holds finished, gated files. */
+const EXPORT_HOOK = (() => {
+  try { const v = JSON.parse(process.env.FABLECUT_EXPORT_HOOK || "null"); return Array.isArray(v) && v.length ? v : null; }
+  catch { return null; }
+})();
+const EXPORT_PRIVATE = process.env.FABLECUT_EXPORT_PRIVATE || "";
+/** Put a finished export in place: through the hook when there is one, else a rename. */
+async function finishExportFile(partPath, outPath) {
+  if (!EXPORT_HOOK) { fs.renameSync(partPath, outPath); return; }
+  await run(EXPORT_HOOK[0], [...EXPORT_HOOK.slice(1), partPath, outPath]);
+  if (!fs.existsSync(outPath)) throw new Error("the export gate did not write the file");
+  try { fs.rmSync(partPath, { force: true }); } catch { }
+}
 /** Claim final + sibling `.part` paths with exclusive create (`wx`) so concurrent
  *  exports cannot pick the same free name before either file exists. */
 function reserveExportPaths(dir, baseName, ext) {
@@ -183,7 +199,9 @@ function reserveExportPaths(dir, baseName, ext) {
     const stem = i === 0 ? base : `${base}_${i}`;
     i++;
     const outPath = path.join(dir, stem + ext);
-    const partPath = path.join(dir, stem + ".part" + ext);
+    const partDir = EXPORT_PRIVATE && dir === EXPORTS_DIR ? EXPORT_PRIVATE : dir;
+    if (partDir !== dir) fs.mkdirSync(partDir, { recursive: true });
+    const partPath = path.join(partDir, stem + ".part" + ext);
     if (fs.existsSync(outPath)) continue;
     try {
       fs.closeSync(fs.openSync(partPath, "wx")); // exclusive create — claim the name
@@ -1246,7 +1264,7 @@ const server = http.createServer(async (req, res) => {
           }
           if (o.failed) return { file, ok: false, error: o.failed };
           // a file that cannot be put in place fails alone; the others keep finishing
-          try { fs.renameSync(o.partPath, o.outPath); }
+          try { await finishExportFile(o.partPath, o.outPath); }
           catch (e) { return { file, ok: false, error: "could not save the file: " + (e.message || e) }; }
           o.partPath = null; // renamed — cleanup must not delete the finished file
           const report = await verifyDeliveryOutput(sess, o, o.outPath);
@@ -1263,7 +1281,7 @@ const server = http.createServer(async (req, res) => {
       const code = await sess.done;
       if (code !== 0) throw new Error("ffmpeg encode failed: " + sess.err());
       const out = sess.outPath;
-      fs.renameSync(sess.partPath, out);
+      await finishExportFile(sess.partPath, out);
       sess.partPath = null; // renamed — cleanup must not delete the finished file
       cleanupExport(id);
       sendJSON(res, 200, { ok: true, src: "/exports/" + encodeURIComponent(path.basename(out)) });
