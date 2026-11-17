@@ -1140,7 +1140,7 @@ const server = http.createServer(async (req, res) => {
 
   /* API: fast export (browser-rendered frames → ffmpeg encode) */
   if (p === "/api/export/ffmpeg" && req.method === "GET") {
-    sendJSON(res, 200, { available: HAS_FFMPEG });
+    sendJSON(res, 200, { available: HAS_FFMPEG, gate: !!EXPORT_HOOK });   // gate: exports go through Create Summat
     return;
   }
   if (p === "/api/export/profiles" && req.method === "GET") {
