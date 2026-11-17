@@ -2539,11 +2539,11 @@ function showMediaMenu(x, y, m) {
   item("Open in Source", () => loadSourceFromMedia(m));
   item(`Find timeline instances (${uses})`, () => showMediaInstances(m, x, y), uses ? null : "Not used on the timeline");
   item("Media info…", () => showMediaInfo(m, x, y));
-  item(isMediaOffline(m.id) ? "Relink…" : "Relink to another copy…", () => openRelinkDialog([m]), state.connected ? null : "Needs the FableCut server");
-  item("Replace file…", () => replaceMediaFile(m), state.connected ? null : "Needs the FableCut server");
+  item(isMediaOffline(m.id) ? "Relink…" : "Relink to another copy…", () => openRelinkDialog([m]), state.connected ? null : "Needs the Editor server");
+  item("Replace file…", () => replaceMediaFile(m), state.connected ? null : "Needs the Editor server");
   if (m.kind === "video") {
     const ps = proxyStatus.get(m.id);
-    const why = !state.connected ? "Needs the FableCut server" : !state.ffmpeg ? "Needs ffmpeg on the server's PATH" : isMediaOffline(m.id) ? "The file is offline" : null;
+    const why = !state.connected ? "Needs the Editor server" : !state.ffmpeg ? "Needs ffmpeg on the server's PATH" : isMediaOffline(m.id) ? "The file is offline" : null;
     if (ps && (ps.state === "ready" || ps.state === "running" || ps.state === "queued")) item(ps.state === "ready" ? "Delete proxy" : "Stop making the proxy", () => deleteProxies([m]));
     else {
       item("Create proxy (540p)", () => createProxies([m], 540), why);
