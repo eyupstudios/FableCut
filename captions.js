@@ -36,8 +36,21 @@
       label: "Word pop", lines: 1, size: 0.085, y: 0.18, maxDur: 2, words: 3, glyph: 0.55,
       props: { font: "Anton", color: "#ffffff", uppercase: true, strokeWidth: 10, strokeColor: "#000000", textShadow: 14, textAnim: "word-pop" },
     },
+    bold: {
+      label: "Bold outline", lines: 2, size: 0.06, y: 0.3, maxDur: 3, words: 6, glyph: 0.66,
+      props: { font: "Montserrat", weight: 900, color: "#ffffff", strokeWidth: 12, strokeColor: "#000000", textShadow: 0, textAnim: "none" },
+    },
+    minimal: {
+      label: "Minimal", lines: 2, size: 0.036, y: 0.38, maxDur: 6, glyph: 0.5,
+      props: { font: "Inter", weight: 500, color: "#ffffff", textShadow: 6, textAnim: "none" },
+    },
   };
   const DEFAULT_STYLE = "subtitle";
+  /** Safe zone for 9:16 Shorts / Reels / TikTok (Create Summat, 18 Nov): pixels kept clear of the platforms'
+   *  buttons and captions on a 1080x1920 canvas, scaled to the canvas. ESTIMATES until checked against screenshots
+   *  of each app. */
+  const SAFE = { top: 250, bottom: 420, left: 60, right: 140, w: 1080, h: 1920 };
+  const vertical = (w, h) => h > w * 1.2;
   /** An average glyph's width as a fraction of the font size, when a style doesn't give its own. */
   const GLYPH = 0.56;
 
@@ -53,7 +66,8 @@
   function metrics(st, width, height, opts = {}) {
     const S = STYLES[style(st)];
     const fontSize = Math.round(Math.min(width, height) * S.size * (+opts.scale > 0 ? +opts.scale : 1));
-    const chars = Math.max(8, Math.floor((width * 0.84) / (fontSize * (S.glyph || GLYPH))));
+    const usable = vertical(width, height) ? width * (1 - (SAFE.left + SAFE.right) / SAFE.w) * 0.95 : width * 0.84;
+    const chars = Math.max(8, Math.floor(usable / (fontSize * (S.glyph || GLYPH))));
     return { fontSize, chars, lines: opts.lines > 0 ? Math.min(3, Math.round(opts.lines)) : S.lines, words: opts.words > 0 ? Math.round(opts.words) : S.words || Infinity, maxDur: S.maxDur };
   }
 
@@ -151,8 +165,17 @@
   /** A caption clip (for addClip) for a cue: the style on this canvas, `y` placed by the style. */
   function clip(cue, { style: st, width, height, track, id, scale } = {}) {
     const k = style(st), S = STYLES[k], m = metrics(k, width || 1920, height || 1080, { scale });
-    const props = Object.assign({}, S.props, {
-      text: cue.text, fontSize: m.fontSize, y: Math.round((height || 1080) * S.y),
+    const W = width || 1920, H = height || 1080;
+    let y = Math.round(H * S.y);
+    const extra = {};
+    if (vertical(W, H)) {
+      const block = m.fontSize * m.lines * 1.3;
+      const lo = -H / 2 + SAFE.top * H / SAFE.h + block / 2, hi = H / 2 - SAFE.bottom * H / SAFE.h - block / 2;
+      y = Math.round(Math.min(hi, Math.max(lo, y)));
+      extra.x = -Math.round(((SAFE.right - SAFE.left) / 2) * W / SAFE.w);
+    }
+    const props = Object.assign({}, S.props, extra, {
+      text: cue.text, fontSize: m.fontSize, y,
       wordTimes: wordTimes(cue), caption: true, captionStyle: k,
     });
     return { ...(id ? { id } : {}), kind: "text", mediaId: null, track: track || "V2", start: r4(cue.start), duration: r4(cue.end - cue.start), name: "Caption", props };
@@ -223,5 +246,5 @@
     return { track: "V" + n, add: true };
   }
 
-  return { STYLES, DEFAULT_STYLE, DEFAULT_TRACKS, style, metrics, wrap, fit, cues, wordTimes, clip, fromClips, toSRT, toVTT, parse, readStamp, isCaption, trackFor };
+  return { STYLES, DEFAULT_STYLE, SAFE, DEFAULT_TRACKS, style, metrics, wrap, fit, cues, wordTimes, clip, fromClips, toSRT, toVTT, parse, readStamp, isCaption, trackFor };
 });

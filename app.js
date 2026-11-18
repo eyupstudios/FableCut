@@ -9175,6 +9175,13 @@ function buildTranscriptPage() {
     paintTranscriptMarks();
   });
   window.addEventListener("mouseup", () => { trState.drag = false; });
+  // 18 Nov (Create Summat): double-click a word to correct its spelling - its timing stays; the transcript is saved
+  E.body.addEventListener("dblclick", (e) => {
+    const w = e.target.closest(".tw");
+    if (!w) return;
+    e.preventDefault();
+    correctTranscriptWord(+w.dataset.k);
+  });
   // Delete anywhere in this tab means the words, never the timeline's clips: with none selected it does
   // nothing; in the Find box it edits the text
   root.addEventListener("keydown", (e) => {
@@ -9231,6 +9238,29 @@ function renderTranscript(force = false) {
   if (key !== trState.wordsKey) { trState.sel = null; trState.anchor = null; }
   trState.wordsKey = key;
   findTranscript(true);
+}
+/** Correct one word's text in its file's transcript (Create Summat, 18 Nov): the start and end stay, so captions
+ *  made from it keep their timing. Captions already on the timeline are made again from the Transcript tab. */
+async function correctTranscriptWord(k) {
+  const tw = trState.words && trState.words[k];
+  const clip = tw && getClip(tw.clip);
+  const m = clip && getMedia(clip.mediaId);
+  const doc = m && transcriptOf(m.src);
+  if (!doc || !Array.isArray(doc.words)) return;
+  const speed = (+(clip.props && clip.props.speed)) > 0 ? +clip.props.speed : 1;
+  const t = (+clip.in || 0) + (((tw.s + tw.e) / 2) - (+clip.start || 0)) * speed;   // file time of the word
+  const idx = doc.words.findIndex(([, s, e]) => s - 0.02 <= t && t <= e + 0.02);
+  if (idx < 0) return;
+  const text = window.prompt("Correct the word (its timing stays the same):", doc.words[idx][0]);
+  if (text == null || !text.trim() || text.trim() === doc.words[idx][0]) return;
+  doc.words[idx] = [text.trim(), doc.words[idx][1], doc.words[idx][2]];
+  try {
+    await fetch("/api/transcript?src=" + encodeURIComponent(m.src), { method: "POST", body: JSON.stringify(doc) });
+  } catch { toast("Couldn't save the transcript - the change is kept in this tab only"); }
+  transcriptCache.set(m.src, doc);
+  transcriptGen++;
+  renderTranscript(true);
+  toast("Word corrected - make the captions again to use it");
 }
 /** Go to a time from the transcript: the Program monitor shows it, as markers and placements do. */
 function goToTranscriptTime(t) {

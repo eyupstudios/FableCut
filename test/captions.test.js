@@ -129,3 +129,19 @@ test("fromClips leaves out captions on a disabled track", () => {
   assert.equal(C.fromClips(clips).length, 2);
 });
 
+
+
+test("Create Summat looks and the 9:16 safe zone (18 Nov)", () => {
+  assert.ok(C.STYLES.bold && C.STYLES.minimal && C.STYLES.highlight);
+  const cue = { start: 1, end: 2, text: "what a goal", words: [["what", 1, 1.3], ["a", 1.3, 1.4], ["goal", 1.4, 2]] };
+  for (const st of Object.keys(C.STYLES)) {
+    const c = C.clip(cue, { style: st, width: 1080, height: 1920 });
+    const m = C.metrics(st, 1080, 1920);
+    const block = m.fontSize * m.lines * 1.3;
+    assert.ok(960 + c.props.y + block / 2 <= 1920 - C.SAFE.bottom + 0.5, st + " stays above the bottom buttons");
+    assert.ok(960 + c.props.y - block / 2 >= C.SAFE.top - 0.5, st + " stays below the top bar");
+    assert.ok(c.props.x < 0, st + " shifted off the right-hand buttons");
+  }
+  const wide = C.clip(cue, { style: "subtitle", width: 1920, height: 1080 });
+  assert.equal(wide.props.x, undefined);                       // 16:9 unchanged
+});

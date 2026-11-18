@@ -366,7 +366,7 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        style: { type: "string", enum: ["subtitle", "karaoke", "highlight", "pop"], description: "The look (default subtitle)" },
+        style: { type: "string", enum: ["subtitle", "karaoke", "highlight", "pop", "bold", "minimal"], description: "The look (default subtitle)" },
         clipIds: { type: "array", items: { type: "string" }, description: "Caption only these clips' speech (default: every clip with sound)" },
         from: { type: "number", description: "Only speech from this time on (timeline seconds)" },
         to: { type: "number", description: "Only speech before this time" },
