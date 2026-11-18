@@ -87,6 +87,7 @@ let HAS_FFMPEG = false;
 try { HAS_FFMPEG = spawnSync("ffmpeg", ["-version"], { stdio: "ignore" }).status === 0; } catch {}
 
 const MIME = {
+  ".wasm": "application/wasm", ".tflite": "application/octet-stream", ".binarypb": "application/octet-stream",
   ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8", ".json": "application/json",
   ".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",

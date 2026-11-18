@@ -11103,7 +11103,7 @@ function loadScript(src) {
 function ensureBgSeg() {
   if (bgSeg.seg || bgSeg.failed) return bgSeg.loading || Promise.resolve();
   if (!bgSeg.loading) {
-    const base = "https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation";
+    const base = "/vendor/mediapipe/selfie_segmentation";   // bundled (Apache-2.0): offline, no CDN
     bgSeg.loading = loadScript(`${base}/selfie_segmentation.js`).then(() => {
       const seg = new SelfieSegmentation({ locateFile: (f) => `${base}/${f}` });
       seg.setOptions({ modelSelection: 1 });
@@ -11117,7 +11117,7 @@ function ensureBgSeg() {
       bgSeg.seg = seg;
     }).catch(() => {
       bgSeg.failed = true;
-      toast("Background removal unavailable — couldn't load MediaPipe (offline?). Using chroma key still works.");
+      toast("Background removal unavailable — its bundled model could not load. Chroma key still works.");
     });
   }
   return bgSeg.loading;
