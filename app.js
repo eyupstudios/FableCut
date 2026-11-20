@@ -6129,15 +6129,35 @@ function startScrub(e) {
   e.preventDefault();
   if (isSourceMode()) setMonitorMode("program");
   state.gesture = true;
-  const seek = (ev) => setTime(timeAtEvent(ev));
+  // Create Summat (Steve, 20 Nov): dragging the playhead to the edge of the timeline keeps going - the timeline
+  // scrolls (faster the further past the edge) so a drag can reach 1:30, 3:00 ... not just what is on screen.
+  let last = e, raf = 0;
+  const seek = (ev) => { last = ev; setTime(timeAtEvent(ev)); };
+  const EDGE = 48;
+  const tick = () => {
+    raf = 0;
+    const sc = els.timelineScroll, r = sc.getBoundingClientRect();
+    const x = last.clientX;
+    let dx = 0;
+    if (x > r.right - EDGE) dx = Math.min(60, 4 + (x - (r.right - EDGE)) * 0.5);
+    else if (x < r.left + EDGE && sc.scrollLeft > 0) dx = -Math.min(60, 4 + ((r.left + EDGE) - x) * 0.5);
+    if (!dx) return;
+    const before = sc.scrollLeft;
+    sc.scrollLeft = Math.max(0, before + dx);
+    if (sc.scrollLeft === before) return;               // the end of the timeline: nothing more to show
+    setTime(timeAtEvent(last));
+    raf = requestAnimationFrame(tick);
+  };
+  const onMove = (ev) => { seek(ev); if (!raf) raf = requestAnimationFrame(tick); };
   seek(e);
   const onUp = () => {
-    window.removeEventListener("pointermove", seek);
+    if (raf) cancelAnimationFrame(raf);
+    window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
     state.gesture = false;
     if (runtime.pendingSync) syncFromServer();
   };
-  window.addEventListener("pointermove", seek);
+  window.addEventListener("pointermove", onMove);
   window.addEventListener("pointerup", onUp);
 }
 /* Marker under a ruler pointer event: the diamond row at the bottom, ±6 px. */
