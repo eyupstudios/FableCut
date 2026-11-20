@@ -920,11 +920,50 @@ const server = http.createServer(async (req, res) => {
       let i = 1;
       const ext = path.extname(name), base = path.basename(name, ext);
       while (fs.existsSync(target)) target = path.join(MEDIA_DIR, `${base}_${i++}${ext}`);
-      const body = await readBody(req);
-      fs.writeFileSync(target, body);
+      // Create Summat (20 Nov): stream to disk - reading a 1.2 GB video into memory first made Import crawl
+      const part = target + ".part";
+      await new Promise((resolve, reject) => {
+        const out = fs.createWriteStream(part);
+        req.on("error", reject); out.on("error", reject); out.on("finish", resolve);
+        req.pipe(out);
+      });
+      fs.renameSync(part, target);
       await faststart(target);
       sendJSON(res, 200, { ok: true, src: "/media/" + encodeURIComponent(path.basename(target)) });
     } catch (e) { sendJSON(res, 500, { error: String(e) }); }
+    return;
+  }
+
+  /* API (Create Summat, 20 Nov): add a file that is already on this computer WITHOUT copying it - a hard link in
+     ./media (instant, no extra disk space; a copy only when the file is on another drive). The same file imported
+     again (same name and size) is reused, never duplicated. Body {path}. Only the Create Summat page may ask
+     (X-FableCut-Client: createsummat - a custom header no other website can send to this server). */
+  if (p === "/api/import-path" && req.method === "POST") {
+    if (req.headers["x-fablecut-client"] !== "createsummat") {
+      sendJSON(res, 403, { error: "import-path needs the X-FableCut-Client: createsummat header" });
+      return;
+    }
+    try {
+      const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
+      const from = String(body.path || "");
+      const okExt = /\.(mp4|mov|m4v|mkv|webm|avi|mpg|mpeg|mp3|wav|m4a|aac|ogg|flac|png|jpe?g|gif|webp|bmp|svg)$/i;
+      if (!path.isAbsolute(from) || !okExt.test(from)) throw new Error("not a video, sound or picture file");
+      const st = fs.statSync(from);
+      if (!st.isFile()) throw new Error("not a file");
+      const name = safeName(path.basename(from));
+      const ext = path.extname(name), base = path.basename(name, ext);
+      let target = path.join(MEDIA_DIR, name), i = 1, reused = false;
+      while (fs.existsSync(target)) {
+        if (fs.statSync(target).size === st.size) { reused = true; break; }
+        target = path.join(MEDIA_DIR, `${base}_${i++}${ext}`);
+      }
+      let how = "reused";
+      if (!reused) {
+        try { fs.linkSync(from, target); how = "link"; }
+        catch { await fs.promises.copyFile(from, target); how = "copy"; }
+      }
+      sendJSON(res, 200, { ok: true, how, src: "/media/" + encodeURIComponent(path.basename(target)), name: path.basename(from) });
+    } catch (e) { sendJSON(res, 400, { error: String(e.message || e) }); }
     return;
   }
 

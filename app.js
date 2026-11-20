@@ -1959,10 +1959,9 @@ async function importFiles(fileList) {
     let src, transient = false;
     if (state.connected) {
       try {
-        const res = await fetch("/api/upload?name=" + encodeURIComponent(file.name), { method: "POST", body: file });
-        if (!res.ok) throw new Error("upload " + res.status);
-        src = (await res.json()).src;
+        src = await uploadWithProgress(file);
       } catch { src = URL.createObjectURL(file); transient = true; }
+      finally { importBusy(null); }
     } else {
       src = URL.createObjectURL(file); transient = true;
     }
@@ -1983,7 +1982,114 @@ async function importFiles(fileList) {
     toast("Couldn't import — unsupported or unreadable file type");
   else if (skipped)
     toast(`Imported ${added}, skipped ${skipped}`);
+  await firstVideoOnTimeline(addedMedia);
   return addedMedia;
+}
+
+/* ── Create Summat (20 Nov, Steve: "I clicked import and it took forever... I thought it had crashed") ── */
+/** A box in the middle of the screen while a file comes in: its name, a bar, what is happening. null hides it. */
+function importBusy(text, frac) {
+  let box = document.getElementById("csImportBusy");
+  if (text == null) { box?.remove(); return; }
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "csImportBusy";
+    box.style.cssText = "position:fixed;left:50%;top:38%;transform:translate(-50%,-50%);z-index:99999;min-width:360px;" +
+      "max-width:80vw;padding:18px 22px;border-radius:12px;background:#0B3157;color:#fff;border:1px solid #B6F23A;" +
+      "box-shadow:0 12px 40px rgba(0,0,0,.5);font:600 15px 'Segoe UI',sans-serif";
+    box.innerHTML = '<div class="t"></div><div style="margin-top:10px;height:8px;border-radius:4px;background:#002244;overflow:hidden">' +
+      '<div class="b" style="height:100%;width:0;background:#B6F23A;transition:width .2s"></div></div>';
+    document.body.appendChild(box);
+  }
+  box.querySelector(".t").textContent = text;
+  const bar = box.querySelector(".b");
+  if (frac == null) { bar.style.width = "100%"; bar.style.opacity = ".45"; }
+  else { bar.style.width = Math.round(Math.max(0, Math.min(1, frac)) * 100) + "%"; bar.style.opacity = "1"; }
+}
+/** POST a dropped / picked file to ./media with a progress bar (fetch() can't report upload progress). */
+function uploadWithProgress(file) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const mb = (n) => (n / 1048576).toFixed(0);
+    importBusy(`Importing ${file.name}…`, 0);
+    xhr.upload.onprogress = (e) => {
+      if (!e.lengthComputable) return;
+      if (e.loaded >= e.total) importBusy(`Getting ${file.name} ready to play…`, null);
+      else importBusy(`Importing ${file.name}… ${mb(e.loaded)} of ${mb(e.total)} MB`, e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      if (xhr.status < 200 || xhr.status >= 300) return reject(new Error("upload " + xhr.status));
+      try { resolve(JSON.parse(xhr.responseText).src); } catch (e) { reject(e); }
+    };
+    xhr.onerror = () => reject(new Error("upload failed"));
+    xhr.open("POST", "/api/upload?name=" + encodeURIComponent(file.name));
+    xhr.send(file);
+  });
+}
+/** Files already on this computer (the Create Summat window's own file picker): added without copying. */
+async function importPaths(paths) {
+  const folderId = runtime.importFolderId && getFolder(runtime.importFolderId) ? runtime.importFolderId : null;
+  runtime.importFolderId = null;
+  const addedMedia = [], gen = runtime.projectGen, failed = [];
+  for (const full of paths || []) {
+    const name = String(full).split(/[\\/]/).pop();
+    const kind = mediaKindFromFile({ name, type: "" });
+    if (!kind) { failed.push(name); continue; }
+    importBusy(`Adding ${name}…`, null);
+    try {
+      const res = await fetch("/api/import-path", {
+        method: "POST", headers: { "Content-Type": "application/json", "X-FableCut-Client": "createsummat" },
+        body: JSON.stringify({ path: full }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || res.status);
+      const already = project.media.find((x) => x.src === j.src);
+      if (already) { addedMedia.push(already); continue; }      // the same file again: no second copy in the bin
+      const m = { id: "m_" + uid(), name, kind, src: j.src, folderId };
+      importBusy(`Reading ${name}…`, null);
+      await loadMediaMetadata(m);
+      if (kind === "video") grabThumb(m).catch(() => { });
+      ensureWave(m);
+      if (gen !== runtime.projectGen) break;
+      project.media.push(m);
+      addedMedia.push(m);
+    } catch (e) { failed.push(name); }
+  }
+  importBusy(null);
+  renderBin(); scheduleSave();
+  refreshMediaInfo(addedMedia.filter((m) => !m.width || !m.fps));
+  if (failed.length) toast(`Couldn't add ${failed.join(", ")}`);
+  await firstVideoOnTimeline(addedMedia);
+  return addedMedia;
+}
+window.__csImportPaths = (paths) => importPaths(paths);
+/** The first video into an EMPTY timeline: the project takes the video's shape and frame rate (a 16:9 video on a
+ *  leftover 9:16 Short project looked tiny) and the video goes on the timeline, ready to cut. */
+async function firstVideoOnTimeline(added) {
+  const m = (added || []).find((x) => x.kind === "video");
+  if (!m || project.clips.length || state.compCtx) return;
+  let w = +m.width | 0, h = +m.height | 0, fps = +m.fps || 0;
+  if (state.connected && !(fps > 0)) {
+    try {
+      const r = await fetch("/api/media-info?src=" + encodeURIComponent(m.src));
+      const info = (await r.json()).info || {};
+      fps = +info.fps || 0; w = w || (+info.width | 0); h = h || (+info.height | 0);
+    } catch { }
+  }
+  if (w > 0 && h > 0) {
+    w -= w % 2; h -= h % 2;
+    if (project.width !== w || project.height !== h) { project.exportFrame = null; setCanvasSize(w, h); }
+  }
+  if (fps > 0) {
+    const best = FPS_PRESETS.reduce((a, b) => (Math.abs(b - fps) < Math.abs(a - fps) ? b : a));
+    if (project.fps !== best) { project.fps = best; syncFpsSel(); updateMonitorRes(); }
+  }
+  const c = addClipFromMedia(m, "V1", 0);
+  if (c) {
+    setMonitorMode("program");
+    state.dirtyTimeline = true;
+    toast(`${m.name} is on the timeline · ${project.width}×${project.height} ${project.fps} fps`);
+  }
 }
 
 function setImportUrlBusy(busy) {
@@ -3058,6 +3164,11 @@ function syncProxyButton() {
    position — park the input under the cursor and open after the mouse
    gesture finishes so the dialog doesn't appear then jump. */
 function openFileImport(clientX, clientY) {
+  if (document.body.classList.contains("hosted") && state.connected &&       // Create Summat's own file picker: no copying
+      new URLSearchParams(location.search).get("picker") === "1") {          // (only an app that handles it says so)
+    (window.__c1msg = window.__c1msg || []).push("editor-import");
+    return;
+  }
   const input = els.fileInput;
   if (clientX != null && clientY != null) {
     input.style.cssText =
@@ -7968,6 +8079,27 @@ function syncSourceMedia() {
   }
   // Paused: do not seek here. setSourceTime() handles user scrubs; seeking on
   // every post-pause drift flash-blacks the video frame.
+}
+/** Create Summat (20 Nov): the Source monitor shows a file in ITS OWN shape - a 16:9 video filled the viewer only
+ *  on a 16:9 project; on a 9:16 Short project it was drawn tiny inside the tall canvas. Program keeps the canvas. */
+function previewDims() {
+  if (isSourceMode()) {
+    const m = sourceMedia();
+    const w = +m?.width || runtime.sourceEl?.videoWidth || 0, h = +m?.height || runtime.sourceEl?.videoHeight || 0;
+    if (m && (m.kind === "video" || m.kind === "image") && w > 0 && h > 0) {
+      const s = Math.min(1, 1920 / Math.max(w, h));
+      return [Math.max(2, Math.round(w * s)), Math.max(2, Math.round(h * s))];
+    }
+  }
+  return [Math.max(2, project.width | 0 || 1280), Math.max(2, project.height | 0 || 720)];
+}
+function syncPreviewDims() {
+  const [w, h] = previewDims();
+  if (els.preview.width === w && els.preview.height === h) return;
+  els.preview.width = w; els.preview.height = h;
+  runtime.sourceHold = null; runtime.sourceHoldOk = false;
+  monitorFitCache = null;
+  lastDrawKey = null;                 // a resized canvas is blank: draw on this tick
 }
 function drawSourceContain(ctx, src, sw, sh, W, H) {
   if (!src || !(sw > 0) || !(sh > 0)) return false;
@@ -16024,6 +16156,7 @@ function loop(ts) {
   }
   const draw = frameDue(ts);
   if (!state.rendering) { // fast export owns media seeking + the canvas
+    syncPreviewDims();
     if (isSourceMode()) {
       syncSourceMedia();
       if (draw) drawSourceFrame();
