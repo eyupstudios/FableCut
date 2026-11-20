@@ -22,7 +22,7 @@
   ],
   "scripts": {
     "start": "node server.js",
-    "test": "node --test"
+    "test": "node --test --require ./test/guard.cjs"
   },
   "keywords": [
     "video-editor",

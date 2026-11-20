@@ -5,6 +5,7 @@
    editor they already have open on 7777. Readiness is always established by
    polling for a real response — never by sleeping for a guessed interval. */
 "use strict";
+require("./guard.cjs"); // Steve's rule: tests never touch the real app / Editor / files
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const net = require("node:net");
