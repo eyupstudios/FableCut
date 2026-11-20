@@ -124,7 +124,9 @@ function rawGet(port, rawPath, headers = {}) {
 function startMcp(t, dataDir, env = {}) {
   const child = spawn(process.execPath, [path.join(ROOT, "mcp-server.js")], {
     cwd: ROOT,
-    env: { ...process.env, FABLECUT_DATA_DIR: dataDir, ...env },
+    // Create Summat (20 Nov): never the editor someone has open on 7777 - with the default port the "every tool"
+    // test sent a real export to Steve's open editor. A port nothing listens on, unless a test passes its own.
+    env: { ...process.env, FABLECUT_PORT: "7999", FABLECUT_DATA_DIR: dataDir, ...env },
     stdio: ["pipe", "pipe", "pipe"],
   });
   const pending = new Map();
