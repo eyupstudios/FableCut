@@ -1874,23 +1874,95 @@ let decodeCtx = null;
 function getDecodeCtx() {
   return decodeCtx || (decodeCtx = new (window.AudioContext || window.webkitAudioContext)());
 }
+/* Create Summat 21 Nov: decoded sound is the Editor's biggest memory cost (a 30 min stereo file is ~700 MB as
+   float32, and the old path also downloaded the whole video file to get it). Only actions that need samples
+   (normalize, silence, beats, transcription, the export mix) decode, from the sound track alone (/api/audio),
+   and a decode nobody has used for AUDIO_KEEP_MS is let go. Waveforms come from server-made peaks (ensureWave). */
+const AUDIO_KEEP_MS = 120000;
+const audioUse = new Map();          // src -> {last, buf}
 function getAudioBuffer(m) {
   const src = m.src;
   let p = runtime.audioBufs.get(src);
   if (!p) {
-    p = fetch(src).then((r) => r.arrayBuffer())
+    const from = state.connected && /^\/(media|library)\//.test(src) ? "/api/audio?src=" + encodeURIComponent(src) : src;
+    // an older server without /api/audio: the file itself, as before
+    p = fetch(from).then((r) => (r.ok || from === src ? r : fetch(src)))
+      .then((r) => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); })
       .then((ab) => getDecodeCtx().decodeAudioData(ab));
     runtime.audioBufs.set(src, p);
-    p.catch(() => runtime.audioBufs.delete(src));
+    p.then((buf) => { const u = audioUse.get(src); if (u) u.buf = buf; }, () => { runtime.audioBufs.delete(src); audioUse.delete(src); });
   }
+  const u = audioUse.get(src);
+  if (u) u.last = Date.now(); else audioUse.set(src, { last: Date.now(), buf: null });
   return p;
 }
+/** The decoded sound only if it is already in memory (audio hold while scrubbing never starts a decode). */
+function audioBufferIfReady(m) {
+  const u = audioUse.get(m.src);
+  if (!u || !u.buf) return null;
+  u.last = Date.now();
+  return u.buf;
+}
+function releaseAudio(src) { runtime.audioBufs.delete(src); audioUse.delete(src); }
+const HOLD_DECODE_MAX_S = 600;       // audio hold decodes a file only when it is short (10 min); longer: only if already decoded
+function holdAudio(m) {
+  const ready = audioBufferIfReady(m);
+  if (ready) return Promise.resolve(ready);
+  return +m.duration > 0 && +m.duration <= HOLD_DECODE_MAX_S ? getAudioBuffer(m) : null;
+}
+/* Let go of what the timeline no longer uses: players of clips that are gone (an undo, an agent's edit, another
+   project), waveforms and decoded sound of files no longer in the project, and decodes unused for a while. */
+function sweepMediaMemory() {
+  try {
+    const now = Date.now();
+    const clipIds = new Set(), mediaIds = new Set(), srcs = new Set();
+    const addClips = (list) => { for (const c of list || []) clipIds.add(c.id); };
+    addClips(project.clips);
+    for (const k of project.comps || []) addClips(k.clips);
+    for (const s of project.sequences || []) addClips(s.clips);
+    for (const m of project.media || []) { mediaIds.add(m.id); srcs.add(m.src); }
+    for (const id of [...runtime.clipEls.keys()]) if (!clipIds.has(id)) releaseClipEl(id);
+    for (const id of [...runtime.wavePeaks.keys()]) if (!mediaIds.has(id)) runtime.wavePeaks.delete(id);
+    for (const [src, u] of [...audioUse]) if (!srcs.has(src) || now - u.last > AUDIO_KEEP_MS) releaseAudio(src);
+    for (const src of [...runtime.audioBufs.keys()]) if (!audioUse.has(src)) runtime.audioBufs.delete(src);
+  } catch { }
+}
+setInterval(sweepMediaMemory, 15000);
+const serverPeaksMissing = new Set();
+function peaksFromServer(m) {
+  return fetch("/api/peaks?src=" + encodeURIComponent(m.src)).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then((j) => {
+      const channels = (j.peaks || []).map((b64) => {
+        const bin = atob(b64), out = new Float32Array(bin.length);
+        for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i) / 255;
+        return out;
+      });
+      return { channels, numberOfChannels: j.channels };
+    });
+}
 function ensureWave(m) {
-  // Also decode peaks from video files when their audio is placed on an A track
+  // Also draw peaks from video files when their audio is placed on an A track
   if (m.kind !== "audio" && m.kind !== "video") return;
   const have = runtime.wavePeaks.get(m.id), src = m.src;
   if (have && (have instanceof Float32Array || have.src === src)) return;
   runtime.wavePeaks.set(m.id, { src, pending: true });
+  if (state.connected && /^\/(media|library)\//.test(src) && !serverPeaksMissing.has(src)) {
+    peaksFromServer(m).then(({ channels, numberOfChannels }) => {
+      if (runtime.wavePeaks.get(m.id)?.src !== src) return;
+      const n = channels.length ? channels[0].length : 0;
+      const max = new Float32Array(n);
+      for (let i = 0; i < n; i++) { let mx = 0; for (const p of channels) if (p[i] > mx) mx = p[i]; max[i] = mx; }
+      runtime.wavePeaks.set(m.id, { src, channels, max });
+      if (m.channels == null && numberOfChannels > 0) m.channels = numberOfChannels;
+      state.dirtyTimeline = true;
+    }).catch(() => {
+      if (runtime.wavePeaks.get(m.id)?.src !== src) return;
+      runtime.wavePeaks.delete(m.id);
+      // an older server (no /api/peaks): decode as before, but only files short enough not to eat the memory
+      if (+m.duration > 0 && +m.duration <= HOLD_DECODE_MAX_S) { serverPeaksMissing.add(src); ensureWave(m); }
+    });
+    return;
+  }
   getAudioBuffer(m).then((buf) => {
     if (runtime.wavePeaks.get(m.id)?.src !== src) return;   // the entry points at another file now (relink, another project)
     const n = Math.max(1, Math.ceil(buf.duration * WAVE_PEAKS_PER_SEC));
@@ -2835,6 +2907,7 @@ function reloadMediaSource(m, oldSrc) {
     if (el._fcSrc === m.src || (oldSrc && el._fcSrc === oldSrc) || (proxySrc && el._fcSrc === proxySrc)) releaseClipEl(id);
   runtime.mediaAux.delete(m.id);
   runtime.wavePeaks.delete(m.id);
+  releaseAudio(m.src); if (oldSrc) releaseAudio(oldSrc);
   if (state.source.mediaId === m.id) { const sm = m; clearSource(); loadSourceFromMedia(sm); }
   seekMediaWhilePaused();   // fresh players start at 0 — park them on the playhead
   loadMediaMetadata(m).then(() => {
@@ -3836,6 +3909,7 @@ function onProjectSwitched() {
   for (const id of [...runtime.clipEls.keys()]) releaseClipEl(id);
   runtime.mediaAux.clear();
   runtime.wavePeaks.clear();
+  runtime.audioBufs.clear(); audioUse.clear();      // decoded sound of the last project: let it go
   proxyStatus.clear();
 }
 function initProjectsUi() {
@@ -4326,6 +4400,16 @@ function applySourceWindowToClip(c, win) {
    does. Shares the getAudioBuffer() cache, so this never decodes twice. */
 async function detectChannelCount(m) {
   if (m.channels != null) return m.channels;
+  // ffprobe already said (media metadata), or the server's peaks know: no decode of the whole file (21 Nov)
+  if (+m.audioChannels > 0) { m.channels = +m.audioChannels; return m.channels; }
+  if (state.connected && /^\/(media|library)\//.test(m.src)) {
+    try {
+      const r = await fetch("/api/media-info?src=" + encodeURIComponent(m.src));
+      const ch = +((await r.json()).info || {}).audioChannels;
+      if (ch > 0) { if (m.channels == null) m.channels = ch; return m.channels; }
+      if (ch === 0) { if (m.channels == null) m.channels = 2; return m.channels; }
+    } catch { }
+  }
   try {
     const buf = await getAudioBuffer(m);
     if (m.channels == null) m.channels = buf.numberOfChannels;
@@ -10853,7 +10937,9 @@ function refreshAudioHold() {
     if (runtime.sourceEl && !runtime.sourceEl.paused) runtime.sourceEl.pause();
     const m = sourceMedia();
     if (!m || (m.kind !== "audio" && m.kind !== "video")) return;
-    getAudioBuffer(m).then((buf) => {
+    const holdBuf = holdAudio(m);
+    if (!holdBuf) return;
+    holdBuf.then((buf) => {
       if (audioHoldStale(gen, state.source.playing)) return;
       if (!(buf.duration > 0) || t >= buf.duration) return;
       const slice = sliceAudioFrame(audio.ctx, buf, t, frameDur);
@@ -10884,7 +10970,9 @@ function refreshAudioHold() {
     const p = evalProps(c, t);
     const vol = clipAudioGain(p);
     if (vol <= 1e-4) continue; // skip muted picture track (linked stems carry the sound)
-    getAudioBuffer(m).then((buf) => {
+    const holdBuf = holdAudio(m);
+    if (!holdBuf) continue;
+    holdBuf.then((buf) => {
       if (audioHoldStale(gen, state.playing)) return;
       const mt = mediaTimeAt(c, t);
       if (!(buf.duration > 0) || mt >= buf.duration) return;

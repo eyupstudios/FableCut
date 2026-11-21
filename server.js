@@ -48,6 +48,7 @@ const { probeFile } = require("./media-probe");
 const MediaLib = require("./media-lib");
 const { createProxies } = require("./proxy");
 const { createTranscripts } = require("./transcripts");
+const { createPeaks } = require("./peaks");
 const Delivery = require("./delivery");
 const { createProjects } = require("./projects");
 const { createHistory } = require("./history");
@@ -128,6 +129,8 @@ function broadcast(event = "change", data = event) {
 const proxies = createProxies({ dir: PROXIES_DIR, resolveSrc, probe: probeFile, broadcast: (ev, data) => broadcast(ev, data) });
 /* Word transcripts, one per version of a file (fablecut_transcribe, the Transcript tab). */
 const transcripts = createTranscripts({ dir: path.join(ANALYSIS_DIR, "transcripts"), resolveSrc });
+/* Waveform peaks + the sound track alone, so the page never decodes whole files for waveforms (peaks.js). */
+const peaks = createPeaks({ dir: path.join(ANALYSIS_DIR, "peaks"), resolveSrc, probe: probeFile });
 let debounce = null;
 let profilesDebounce = null;
 function onFsChange() {
@@ -755,6 +758,21 @@ const server = http.createServer(async (req, res) => {
       }));
       sendJSON(res, 200, { info });
     } catch (e) { sendJSON(res, 400, { error: String(e.message || e) }); }
+    return;
+  }
+
+  /* API: waveform peaks, GET /api/peaks?src=/media/x.mp4 → {v, rate, channels, duration, peaks:[base64 Uint8]}
+     (404 when the file is missing); GET /api/audio?src= → the sound track alone as WAV. */
+  if (p === "/api/peaks" && req.method === "GET") {
+    try {
+      const r = await peaks.get(url.searchParams.get("src") || "");
+      if (!r) { sendJSON(res, 404, { error: "no such file" }); return; }
+      sendJSON(res, 200, r);
+    } catch (e) { sendJSON(res, 500, { error: String(e.message || e) }); }
+    return;
+  }
+  if (p === "/api/audio" && req.method === "GET") {
+    peaks.streamAudio(url.searchParams.get("src") || "", res);
     return;
   }
 
