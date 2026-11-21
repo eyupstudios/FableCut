@@ -2066,8 +2066,24 @@ window.__csImportPaths = (paths) => importPaths(paths);
 /** The first video into an EMPTY timeline: the project takes the video's shape and frame rate (a 16:9 video on a
  *  leftover 9:16 Short project looked tiny) and the video goes on the timeline, ready to cut. */
 async function firstVideoOnTimeline(added) {
-  const m = (added || []).find((x) => x.kind === "video");
-  if (!m || project.clips.length || state.compCtx) return;
+  const vids = (added || []).filter((x) => x.kind === "video");
+  const m = vids[0];
+  if (!m || state.compCtx) return;
+  if (project.clips.length) {
+    // Steve 21 Nov: "added video, no timeline again" - an imported video always lands on the timeline: at the end
+    // of what is already there (never on top of it). The Source monitor is only for picking a bit of a file.
+    let placed = 0;
+    for (const v of vids) {
+      const end = project.clips.reduce((a, c) => Math.max(a, (+c.start || 0) + (+c.duration || 0)), 0);
+      if (addClipFromMedia(v, "V1", end)) placed++;
+    }
+    if (placed) {
+      setMonitorMode("program");
+      state.dirtyTimeline = true;
+      toast(placed === 1 ? `${m.name} is on the timeline, after what was already there` : `${placed} videos added to the end of the timeline`);
+    }
+    return;
+  }
   let w = +m.width | 0, h = +m.height | 0, fps = +m.fps || 0;
   if (state.connected && !(fps > 0)) {
     try {
