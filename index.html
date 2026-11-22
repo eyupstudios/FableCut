@@ -311,13 +311,22 @@
       </select>
       <p class="dim export-profile-note" id="exportRangeNote"></p>
     </div>
+    <div class="xs" id="exportSimple">
+      <div class="xs-row"><span class="xs-label">Where's it going?</span>
+        <div class="xs-seg" id="xsDest" role="group" aria-label="Where's it going?"></div></div>
+      <div class="xs-row"><span class="xs-label">Quality</span>
+        <div class="xs-seg" id="xsQual" role="group" aria-label="Quality"></div></div>
+      <p class="xs-est" id="xsEst" role="status"></p>
+    </div>
+    <details class="xs-adv" id="exportAdvanced">
+    <summary>Advanced <span class="dim">codec, bitrate, ProRes, Broadcast, Master, Archive, encoding profiles, the export method, batch and queue</span></summary>
     <label class="engine-opt">
       <input type="radio" name="engine" id="engineFast">
-      <span><b>Fast (ffmpeg)</b><br><span class="dim" id="engineFastNote">Frame-accurate ffmpeg encode. Keeps rendering if you switch tabs.</span></span>
+      <span><b>Standard export (ffmpeg)</b><br><span class="dim" id="engineFastNote">What the simple choices above use: frame-accurate, and it follows every setting here. Keeps rendering if you switch tabs.</span></span>
     </label>
     <label class="engine-opt">
       <input type="radio" name="engine" id="engineRealtime">
-      <span><b>WebCodecs (HW encode)</b><br><span class="dim" id="engineWebCodecsNote">Frame-accurate. Browser encodes H.264; server muxes. Needs a modern Chromium and ffmpeg.</span></span>
+      <span><b>Browser hardware encode (WebCodecs)</b><br><span class="dim" id="engineWebCodecsNote">The project's own size at a fixed bitrate only: it does not follow the platform settings. Needs a modern Chromium and ffmpeg.</span></span>
     </label>
     <div class="export-profile-row dlv" id="exportProfileRow">
       <div class="dlv-preset-line">
@@ -439,6 +448,7 @@
       </label>
       <p class="dim export-wc-hint">WebCodecs has no CRF — quality is driven by bitrate. VBR spends bits on hard frames; CBR holds a steady rate.</p>
     </div>
+    </details>
     <div class="export-track-warn hidden" id="dlvWarn" role="status"></div>
     <div class="export-track-warn hidden" id="exportTrackWarn" role="status"></div>
     </div>

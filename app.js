@@ -16464,6 +16464,7 @@ function syncExportChoiceUi(source) {
   if (!isD) {
     updateExportProfileNote(c.id);
     const w = $("dlvWarn"); if (w) { w.textContent = ""; w.classList.add("hidden"); }
+    xsRender();
     return;
   }
   if (!dlvSpec || dlvSpec.preset !== c.id) {
@@ -16657,6 +16658,7 @@ function refreshDeliveryNotes() {
     ...Delivery.checks(sp, { duration: range.dur, fps, canvasW: cv.w, canvasH: cv.h, region: cv.region })];
   const w = $("dlvWarn");
   if (w) { w.textContent = warn.join(" · "); w.classList.toggle("hidden", !warn.length); }
+  xsRender();
 }
 async function saveDeliveryPreset() {
   const name = $("dlvSaveName").value.trim();
@@ -16687,8 +16689,9 @@ function syncExportProfileVisibility() {
   els.exportProfileRow?.classList.toggle("hidden", !show);
   // the batch list and the queue are Fast export (ffmpeg) only
   for (const id of ["dlvBatch", "btnQueueExport", "btnBatchExport"]) $(id)?.classList.toggle("hidden", !show);
-  if (!show) { const w = $("dlvWarn"); if (w) w.classList.add("hidden"); }
+  if (!show) { const w = $("dlvWarn"); if (w) w.classList.add("hidden"); xsRender(); }
   else if (selectedExportChoice().kind === "delivery") refreshDeliveryNotes();
+  else xsRender();
 }
 
 function syncExportWcOpts() {
@@ -16799,6 +16802,9 @@ async function openExportSetup() {
   syncExportProfileVisibility();
   Promise.all([fetchEncodeProfiles(), fetchDeliveryInfo()]).then(() => {
     populateExportProfileSelect();
+    // nothing chosen before (not in the project, not in this browser): start on the simple choice for this shape
+    if (dlvSource === "default" && !project.delivery && !project.encodeProfile)
+      xsApply((project.height | 0) > (project.width | 0) ? "youtube-shorts" : "youtube", 1080);
     syncExportProfileVisibility();
     renderBatchList();
     renderQueue();
@@ -16857,16 +16863,23 @@ function fillExportRangeSelect() {
   const sel = $("exportRangeSel");
   if (sel) sel.value = hasWorkArea() ? "in-out" : "entire";
 }
+/** A length in plain words ("1 h 12 min 28 s"): the timecode beside it is minutes:seconds:frames, which reads like
+ *  hours (22 Nov 2026: "00:00:00 → 72:28:45" was taken for a 72-hour export). */
+function plainDuration(seconds) {
+  const s = Math.max(0, Math.round(seconds)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+  return [h ? `${h} h` : "", h || m ? `${m} min` : "", `${x} s`].filter(Boolean).join(" ");
+}
 function exportRangeNoteText() {
   const mode = exportRangeMode();
   const { start, dur, frames } = exportRange();
   const end = start + dur;
-  if (mode === "entire") return `Full timeline · ${fmt(start)} → ${fmt(end)}`;
+  const span = `${plainDuration(dur)} (${fmt(start)} → ${fmt(end)})`;
+  if (mode === "entire") return `Full timeline · ${span}`;
   if (frames < 1) return "IN–OUT is empty — markers are at or past the end of the timeline.";
   const inn = project.inPoint != null, out = project.outPoint != null;
-  if (inn && out) return `IN–OUT · ${fmt(start)} → ${fmt(end)}`;
-  if (inn) return `IN to end · ${fmt(start)} → ${fmt(end)}`;
-  return `Start to OUT · ${fmt(start)} → ${fmt(end)}`;
+  if (inn && out) return `IN–OUT · ${span}`;
+  if (inn) return `IN to end · ${span}`;
+  return `Start to OUT · ${span}`;
 }
 function syncExportRangeUi() {
   const note = $("exportRangeNote");
@@ -17622,6 +17635,88 @@ async function seekVideosTo(t, { queueBusy } = {}) {
   }
   prefetchExportVideos(t);
 }
+/* ── Export, simple by default (22 Nov 2026) ──
+   Steve: "Editor Export window is too technical. Simple by default: 'Where's it going?' (YouTube / Shorts / TikTok /
+   Reels / X) and 'Quality' (Standard 1080p / High 1440p / Max 4K) with estimated time and file size, plus Export /
+   Add to queue. Everything else under 'Advanced'. 'Fast (ffmpeg)' vs 'WebCodecs' is confusing: make it ONE choice."
+   The two rows only set what the full controls under Advanced already hold (a platform preset and its size), so
+   there is one set of settings however it was chosen. The simple view has no method choice: it always uses the
+   standard (ffmpeg) export, the one that follows every setting. */
+const XS_DEST = [["youtube", "YouTube"], ["youtube-shorts", "Shorts"], ["tiktok", "TikTok"], ["instagram-reels", "Reels"], ["x", "X"]];
+const XS_QUAL = [[1080, "Standard 1080p"], [1440, "High 1440p"], [2160, "Max 4K"]];
+const xsSize = (dest, q) => {            // the short side is the quality; 16:9 or 9:16 as the platform takes it
+  const p = Delivery.PRESETS[dest] || {};
+  const long = Math.round((q * 16) / 9 / 2) * 2;
+  return (p.height || 0) > (p.width || 0) ? { width: q, height: long } : { width: long, height: q };
+};
+/** What the simple rows show for the current settings: {dest, q} (null where the settings are something else). */
+function xsCurrent() {
+  const c = selectedExportChoice();
+  if (c.kind !== "delivery" || !dlvSpec || !els.engineFast || !els.engineFast.checked) return { dest: null, q: null };
+  const dest = XS_DEST.some(([id]) => id === dlvSpec.preset) ? dlvSpec.preset : null;
+  const fr = deliveryFrame(dlvSpec), short = Math.min(fr.outW, fr.outH);
+  const q = dest && XS_QUAL.some(([v]) => v === short) && !deliveryModifiedBeyondSize() ? short : null;
+  return { dest, q };
+}
+/** Anything other than the size changed from the platform preset (a codec, a bitrate ...): the simple rows then say "custom". */
+function deliveryModifiedBeyondSize() {
+  if (!dlvSpec || !Delivery.PRESETS[dlvSpec.preset]) return true;
+  const base = normalizeDelivery(dlvSpec.preset).spec;
+  const strip = (s) => JSON.stringify({ ...s, width: 0, height: 0, filename: "" });
+  return strip(dlvSpec) !== strip(base);
+}
+function xsApply(dest, q) {
+  if (!els.exportProfileSel || !Delivery.PRESETS[dest]) return;
+  if (els.engineFast && !els.engineFast.disabled) els.engineFast.checked = true;      // one method: the standard export
+  els.exportProfileSel.value = "d:" + dest;
+  const n = normalizeDelivery({ ...normalizeDelivery(dest).spec, ...xsSize(dest, q) });
+  dlvSpec = n.spec; dlvNotes = n.notes; dlvSource = "preset";
+  setSetting("exportKind", "delivery");
+  syncExportProfileVisibility();
+  syncExportWcOpts();
+  syncExportChoiceUi("preset");
+}
+/** Seconds one frame took on this PC at each quality, learned from finished exports (setting "exportPace"). */
+function exportPaceRecord(frames, q) {
+  if (!exportClock || !(frames > 0) || !(q > 0)) return;
+  const dt = (performance.now() - exportClock.t0) / 1000;
+  if (dt < 5) return;
+  setSetting("exportPace", { ...(getSetting("exportPace") || {}), [q]: dt / frames });
+}
+function exportTimeGuess(frames, q, pace) {
+  const all = pace || getSetting("exportPace") || {};
+  if (all[q]) return all[q] * frames;
+  const known = Object.keys(all).map(Number).filter((k) => k > 0 && all[k] > 0).sort((a, b) => Math.abs(a - q) - Math.abs(b - q));
+  return known.length ? all[known[0]] * frames * Math.max(0.5, Math.pow(q / known[0], 1.2)) : null;
+}
+/** A rough file size when the encoder is told a quality, not a bitrate: the bitrates YouTube asks for at each size
+ *  (8 / 16 / 40 Mb/s, half as much again above 30 fps), plus the sound. */
+function xsRoughSize(q, fps, duration, spec) {
+  const base = { 1080: 8000, 1440: 16000, 2160: 40000 }[q];
+  if (!base || !(duration > 0)) return 0;
+  const audio = spec && spec.audio && spec.audio.codec !== "none" ? spec.audio.bitrate || 192 : 0;
+  return Math.round((base * (fps > 30 ? 1.5 : 1) + audio) * 1000 / 8 * duration);
+}
+function xsRender() {
+  const dBox = $("xsDest"), qBox = $("xsQual"), est = $("xsEst");
+  if (!dBox || !qBox || !est) return;
+  const cur = xsCurrent();
+  const btn = (attr, v, label, on) => `<button type="button" class="xs-btn${on ? " on" : ""}" ${attr}="${v}" aria-pressed="${on ? "true" : "false"}">${escapeHtml(label)}</button>`;
+  dBox.innerHTML = XS_DEST.map(([id, label]) => btn("data-dest", id, label, cur.dest === id)).join("");
+  qBox.innerHTML = XS_QUAL.map(([v, label]) => btn("data-q", v, label, cur.q === v)).join("");
+  dBox.querySelectorAll("[data-dest]").forEach((b) => b.addEventListener("click", () => xsApply(b.dataset.dest, cur.q || 1080)));
+  qBox.querySelectorAll("[data-q]").forEach((b) => b.addEventListener("click", () => xsApply(cur.dest || "youtube", +b.dataset.q)));
+  if (!cur.dest || !cur.q) {
+    est.textContent = "Custom settings are chosen under Advanced. Pick where it's going and a quality to go back to the simple ones.";
+    return;
+  }
+  const sp = dlvSpec, fr = deliveryFrame(sp), fps = sp.fps || projectFps(), range = exportRange(fps);
+  const exact = Delivery.estimateSize(sp, { duration: range.dur, width: fr.outW, height: fr.outH, fps });
+  const size = exact || xsRoughSize(cur.q, fps, range.dur, sp);
+  const secs = exportTimeGuess(range.frames, cur.q);
+  const time = secs == null ? "time: shown once this PC has finished one export" : exportTimeLeft(secs).replace(" left", "").replace("nearly done", "under 10 s");
+  est.textContent = `${fr.outW}×${fr.outH} · ${time}${size ? ` · about ${Delivery.fmtBytes(size)}${exact ? "" : " (rough)"}` : ""} · saved as ${deliveryFileName(sp, fps)}${Delivery.CONTAINERS[sp.container].ext}`;
+}
 /* The export window always says where things stand (22 Nov 2026: "export progress (bar, time left, where the file
    goes) always stays visible"): under the bar, the time left worked out from the pace so far, and where the finished
    file goes (the server says, when the export begins). */
@@ -17857,6 +17952,7 @@ async function fastExport(opts = {}) {
     if (!begin.id) throw new Error(begin.error || "export begin failed");
     sessId = begin.id;
     exportStatusBegin(begin.file || (begin.outputs && begin.outputs[0] && begin.outputs[0].file) || "");
+    const paceQ = delivery ? Math.min(deliveryFrame(delivery).outW, deliveryFrame(delivery).outH) : Math.min(project.width | 0, project.height | 0);
     const jpegQ = delivery ? begin.jpegQuality ?? 0.95 : exportProfileMeta(profileId).jpegQuality ?? 0.95;
     const rgba = begin.input === "rgba";
     exportFullCanvas = !!delivery;
@@ -17946,6 +18042,7 @@ async function fastExport(opts = {}) {
     }
     const end = await fetch("/api/export/end?id=" + sessId, { method: "POST", signal }).then((r) => r.json());
     if (!end.src) throw new Error(end.error || "encode failed");
+    exportPaceRecord(frames, paceQ);
     const outs = end.outputs || [{ file: decodeURIComponent(end.src.split("/").pop()), ok: true, src: end.src }];
     // what each output was asked to be, beside what came out
     result = { outputs: outs.map((o, i) => ({ ...o, ...(begin.outputs && begin.outputs[i] ? { summary: begin.outputs[i].summary, notes: begin.outputs[i].notes } : {}) })) };
@@ -18757,6 +18854,7 @@ $("btnRippleDelete").addEventListener("click", () => {
 $("btnExport").addEventListener("click", openExportSetup);
 $("btnStartExport").addEventListener("click", startChosenExport);
 initSendToReadyToPost();
+$("exportAdvanced")?.addEventListener("toggle", (e) => e.target.closest(".export-dialog")?.classList.toggle("adv-open", e.target.open));
 els.exportSetup?.addEventListener("change", (e) => {
   if (e.target.name === "engine") {
     syncExportProfileVisibility();
