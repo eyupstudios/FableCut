@@ -17622,6 +17622,28 @@ async function seekVideosTo(t, { queueBusy } = {}) {
   }
   prefetchExportVideos(t);
 }
+/* "Send to Ready to post" (22 Nov 2026, inside Create Summat's window): when an export is done and the box is
+   ticked, Create Summat (the page this editor sits in) is told the file's name; it writes the Ready to post page
+   (titles, description, chapters, tags, thumbnail) and opens it. Returns true when it was handed over, so the
+   file is not ALSO pushed at the Downloads folder. Outside Create Summat there is no box and nothing changes. */
+const inCreateSummat = () => { try { return window.parent !== window; } catch { return true; } };
+function initSendToReadyToPost() {
+  const row = $("sendRtpRow"), box = $("sendRtp");
+  if (!row || !box || !inCreateSummat()) return;
+  row.classList.remove("hidden");
+  box.checked = getSetting("sendToReadyToPost") !== false;
+  box.addEventListener("change", () => setSetting("sendToReadyToPost", box.checked));
+}
+function sendToReadyToPost(src) {
+  try {
+    const box = $("sendRtp");
+    if (!src || !inCreateSummat() || !box || !box.checked) return false;
+    window.parent.postMessage({ source: "fablecut", type: "exported", project: project.name || "",
+      file: decodeURIComponent(String(src).split("/").pop()) }, "*");
+    toast("Sent to Ready to post: Create Summat is writing its page");
+    return true;
+  } catch { return false; }
+}
 /* The export's audio mix goes to the server in PARTS, straight from the rendered sound (22 Nov 2026: exporting a
    72-minute timeline blanked the whole window; its browser process ran out of memory seconds after the export began.
    The mix was packed into one WAV of the whole timeline, about 0.8 GB, held twice, and posted as one body). Now the
@@ -17910,12 +17932,14 @@ async function fastExport(opts = {}) {
         src: o.src, file: o.file, report: o.report || null });
       renderQueue();
       toast(o.report && !o.report.ok ? `Exported ${o.file} — check: ${o.report.checks.filter((c) => !c.ok).map((c) => c.text).join("; ")} (Export → Queue)` : `Exported ${o.file}${o.report ? " — checks passed" : ""}`);
-      const a = document.createElement("a");
-      a.href = end.src;
-      a.download = decodeURIComponent(end.src.split("/").pop());
-      a.click();
+      if (!sendToReadyToPost(end.src)) {
+        const a = document.createElement("a");
+        a.href = end.src;
+        a.download = decodeURIComponent(end.src.split("/").pop());
+        a.click();
+      }
     }
-    else {
+    else if (!sendToReadyToPost(end.src)) {
       const a = document.createElement("a");
       a.href = end.src;
       a.download = decodeURIComponent(end.src.split("/").pop());
@@ -18585,10 +18609,12 @@ async function webCodecsExport() {
     encoder = null;
     const end = await fetch("/api/export/end?id=" + sessId, { method: "POST", signal }).then((r) => r.json());
     if (!end.src) throw new Error(end.error || "mux failed");
-    const a = document.createElement("a");
-    a.href = end.src;
-    a.download = decodeURIComponent(end.src.split("/").pop());
-    a.click();
+    if (!sendToReadyToPost(end.src)) {
+      const a = document.createElement("a");
+      a.href = end.src;
+      a.download = decodeURIComponent(end.src.split("/").pop());
+      a.click();
+    }
   } catch (e) {
     try { encoder?.close(); } catch { }
     if (sessId) fetch("/api/export/end?id=" + sessId + "&discard=1", { method: "POST" }).catch(() => { });
@@ -18701,6 +18727,7 @@ $("btnRippleDelete").addEventListener("click", () => {
 });
 $("btnExport").addEventListener("click", openExportSetup);
 $("btnStartExport").addEventListener("click", startChosenExport);
+initSendToReadyToPost();
 els.exportSetup?.addEventListener("change", (e) => {
   if (e.target.name === "engine") {
     syncExportProfileVisibility();
