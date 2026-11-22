@@ -317,9 +317,12 @@
       <div class="xs-row"><span class="xs-label">Quality</span>
         <div class="xs-seg" id="xsQual" role="group" aria-label="Quality"></div></div>
       <p class="xs-est" id="xsEst" role="status"></p>
+      <p class="xs-method" id="xsMethod" role="status"></p>
     </div>
     <details class="xs-adv" id="exportAdvanced">
     <summary>Advanced <span class="dim">codec, bitrate, ProRes, Broadcast, Master, Archive, encoding profiles, the export method, batch and queue</span></summary>
+    <label class="xs-force" title="An edit that is only cuts of recordings is normally rendered by Create Summat straight from the recording, which is many times quicker. Tick this to draw every frame in the editor anyway.">
+      <input type="checkbox" id="forceFrames"> Always render frame by frame (never the fast render)</label>
     <label class="engine-opt">
       <input type="radio" name="engine" id="engineFast">
       <span><b>Standard export (ffmpeg)</b><br><span class="dim" id="engineFastNote">What the simple choices above use: frame-accurate, and it follows every setting here. Keeps rendering if you switch tabs.</span></span>
@@ -707,6 +710,7 @@
 <script src="templates.js"></script>
 <script src="media-lib.js"></script>
 <script src="delivery.js"></script>
+<script src="cuts-only.js"></script>
 <script src="mp4-demux.js"></script>
 <script src="app.js"></script>
 </body>

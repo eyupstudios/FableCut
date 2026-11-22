@@ -16834,6 +16834,14 @@ function startChosenExport() {
     alert("Export range is empty — IN/OUT is at or past the end of the timeline. Choose Entire timeline, or move the markers.");
     return;
   }
+  const quick = fastRenderChoice();
+  if (quick.fast) {                        // only cuts of recordings: Create Summat renders it straight from them
+    setSetting("exportKind", "delivery");
+    setSetting("delivery", dlvSpec);
+    closeExportSetup();
+    sendFastExport(quick);
+    return;
+  }
   closeExportSetup();
   if (useFast) {
     const c = selectedExportChoice();
@@ -16882,6 +16890,7 @@ function exportRangeNoteText() {
   return `Start to OUT · ${span}`;
 }
 function syncExportRangeUi() {
+  if (typeof xsRender === "function" && $("xsEst") && dlvSpec) xsRender();
   const note = $("exportRangeNote");
   if (note) note.textContent = exportRangeNoteText();
   const btn = $("btnStartExport");
@@ -17676,6 +17685,36 @@ function xsApply(dest, q) {
   syncExportWcOpts();
   syncExportChoiceUi("preset");
 }
+/* ── The fast render (22 Nov 2026) ──
+   Steve: "when an Editor project is only cuts of recordings (no titles/effects/transitions), Export uses Create
+   Summat's fast renderer automatically; the Editor's frame-by-frame render only when it's needed. Show which one
+   it's using." cuts-only.js decides (every doubt is a no, with its reason); Create Summat renders the cuts straight
+   from the recording on its Queue. Fast only: inside Create Summat, a simple 16:9 choice (YouTube, X), no export
+   frame, and not switched off under Advanced. */
+const FAST_X_REALTIME = 5;            // the hardware encoder's pace at 1080p60 on the measured laptop (22 Nov 2026)
+function fastRenderChoice() {
+  const cur = xsCurrent(), frame = "Method: frame by frame";
+  if (!cur.dest || !cur.q) return { fast: false, text: `${frame} (custom settings).` };
+  if ($("forceFrames") && $("forceFrames").checked) return { fast: false, text: `${frame} (you chose that under Advanced).` };
+  const p = Delivery.PRESETS[cur.dest] || {};
+  if ((p.height || 0) > (p.width || 0)) return { fast: false, text: `${frame}, needed because ${XS_DEST.find((d) => d[0] === cur.dest)[1]} is upright: the picture is reframed.` };
+  if (typeof getExportFrame === "function" && getExportFrame()) return { fast: false, text: `${frame}, needed because an export frame crops the picture.` };
+  if (typeof CutsOnly === "undefined") return { fast: false, text: `${frame}.` };
+  const r = exportRange(), whole = exportRangeMode() === "entire";
+  const plan = CutsOnly.plan(project, DEFAULT_PROPS, whole ? {} : { range: { start: r.start, end: r.start + r.dur } });
+  const d = CutsOnly.describe(plan, inCreateSummat());
+  if (!d.fast) return { fast: false, text: d.text, plan };
+  const minutes = Math.max(1, Math.round(plan.duration / FAST_X_REALTIME * Math.pow(cur.q / 1080, 1.2) / 60));
+  return { fast: true, plan, q: cur.q, minutes, text: `${d.text} About ${minutes} min.` };
+}
+/** Hand the cuts to Create Summat: it renders them on its Queue, into this editor's exports folder. */
+function sendFastExport(choice) {
+  const fps = projectFps(), box = $("sendRtp");
+  hostWindow().postMessage({ source: "fablecut", type: "fast-export", project: project.name || "",
+    pieces: choice.plan.pieces.map((p) => ({ file: p.file, in: p.in, out: p.out })), fps, height: choice.q,
+    name: deliveryFileName(dlvSpec, fps), send: !!(box && box.checked) }, "*");
+  toast(`Create Summat is rendering this the fast way (about ${choice.minutes} min): watch the bar at the top of the window, or its Queue page`);
+}
 /** Seconds one frame took on this PC at each quality, learned from finished exports (setting "exportPace"). */
 function exportPaceRecord(frames, q) {
   if (!exportClock || !(frames > 0) || !(q > 0)) return;
@@ -17708,13 +17747,17 @@ function xsRender() {
   qBox.querySelectorAll("[data-q]").forEach((b) => b.addEventListener("click", () => xsApply(cur.dest || "youtube", +b.dataset.q)));
   if (!cur.dest || !cur.q) {
     est.textContent = "Custom settings are chosen under Advanced. Pick where it's going and a quality to go back to the simple ones.";
+    if ($("xsMethod")) $("xsMethod").textContent = fastRenderChoice().text;
     return;
   }
   const sp = dlvSpec, fr = deliveryFrame(sp), fps = sp.fps || projectFps(), range = exportRange(fps);
   const exact = Delivery.estimateSize(sp, { duration: range.dur, width: fr.outW, height: fr.outH, fps });
   const size = exact || xsRoughSize(cur.q, fps, range.dur, sp);
+  const method = fastRenderChoice();
+  if ($("xsMethod")) $("xsMethod").textContent = method.text;
   const secs = exportTimeGuess(range.frames, cur.q);
-  const time = secs == null ? "time: shown once this PC has finished one export" : exportTimeLeft(secs).replace(" left", "").replace("nearly done", "under 10 s");
+  const time = method.fast ? `about ${method.minutes} min`
+    : secs == null ? "time: shown once this PC has finished one export" : exportTimeLeft(secs).replace(" left", "").replace("nearly done", "under 10 s");
   est.textContent = `${fr.outW}×${fr.outH} · ${time}${size ? ` · about ${Delivery.fmtBytes(size)}${exact ? "" : " (rough)"}` : ""} · saved as ${deliveryFileName(sp, fps)}${Delivery.CONTAINERS[sp.container].ext}`;
 }
 /* The export window always says where things stand (22 Nov 2026: "export progress (bar, time left, where the file
@@ -17745,7 +17788,8 @@ function exportStatusEnd() { exportClock = null; const el = $("exportEta"); if (
    ticked, Create Summat (the page this editor sits in) is told the file's name; it writes the Ready to post page
    (titles, description, chapters, tags, thumbnail) and opens it. Returns true when it was handed over, so the
    file is not ALSO pushed at the Downloads folder. Outside Create Summat there is no box and nothing changes. */
-const inCreateSummat = () => { try { return window.parent !== window; } catch { return true; } };
+const hostWindow = () => { try { return window.__fablecutHost || (window.parent !== window ? window.parent : null); } catch { return null; } };
+const inCreateSummat = () => !!hostWindow();
 function initSendToReadyToPost() {
   const row = $("sendRtpRow"), box = $("sendRtp");
   if (!row || !box || !inCreateSummat()) return;
@@ -17757,7 +17801,7 @@ function sendToReadyToPost(src) {
   try {
     const box = $("sendRtp");
     if (!src || !inCreateSummat() || !box || !box.checked) return false;
-    window.parent.postMessage({ source: "fablecut", type: "exported", project: project.name || "",
+    hostWindow().postMessage({ source: "fablecut", type: "exported", project: project.name || "",
       file: decodeURIComponent(String(src).split("/").pop()) }, "*");
     toast("Sent to Ready to post: Create Summat is writing its page");
     return true;
@@ -18854,6 +18898,8 @@ $("btnRippleDelete").addEventListener("click", () => {
 $("btnExport").addEventListener("click", openExportSetup);
 $("btnStartExport").addEventListener("click", startChosenExport);
 initSendToReadyToPost();
+$("forceFrames")?.addEventListener("change", () => { setSetting("forceFrames", $("forceFrames").checked); xsRender(); });
+if ($("forceFrames")) $("forceFrames").checked = getSetting("forceFrames") === true;
 $("exportAdvanced")?.addEventListener("toggle", (e) => e.target.closest(".export-dialog")?.classList.toggle("adv-open", e.target.open));
 els.exportSetup?.addEventListener("change", (e) => {
   if (e.target.name === "engine") {
