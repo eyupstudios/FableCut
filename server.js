@@ -1230,7 +1230,27 @@ const server = http.createServer(async (req, res) => {
     if (!sess) { sendJSON(res, 404, { error: "no such export session" }); return; }
     try {
       const wavPath = path.join(sess.dir, "audio.wav");
-      fs.writeFileSync(wavPath, await readBody(req));
+      // The mix arrives whole (no `part`: older pages, the API) or in parts (part=0,1,2…, last=1 on the final one:
+      // the editor, so a long timeline's mix is never one block in the browser). Either way it is written to disk
+      // as it arrives, never held in memory here; the export only has its audio once the last part is in.
+      const partArg = url.searchParams.get("part");
+      const part = partArg === null ? null : Number(partArg);
+      if (part !== null && (!Number.isInteger(part) || part !== (sess.wavParts | 0))) {
+        req.resume();
+        sendJSON(res, 409, { error: `audio part ${sess.wavParts | 0} expected, got ${partArg}` });
+        return;
+      }
+      await new Promise((resolve, reject) => {
+        const out = fs.createWriteStream(wavPath, { flags: part ? "a" : "w" });
+        out.on("error", reject); req.on("error", reject);
+        out.on("finish", resolve);
+        req.pipe(out);
+      });
+      touchExport(sess);
+      if (part !== null) {
+        sess.wavParts = part + 1;
+        if (url.searchParams.get("last") !== "1") { sendJSON(res, 200, { ok: true, part }); return; }
+      }
       // outputs that normalize loudness need the mix measured (loudnorm pass one) before ffmpeg starts
       const byTarget = new Map();
       for (const o of sess.outputs || []) {

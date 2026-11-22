@@ -17622,23 +17622,45 @@ async function seekVideosTo(t, { queueBusy } = {}) {
   }
   prefetchExportVideos(t);
 }
-function encodeWAV(buf) {
-  const ch = buf.numberOfChannels, len = buf.length, sr = buf.sampleRate;
-  const bytes = 44 + len * ch * 2;
-  const ab = new ArrayBuffer(bytes), v = new DataView(ab);
+/* The export's audio mix goes to the server in PARTS, straight from the rendered sound (22 Nov 2026: exporting a
+   72-minute timeline blanked the whole window; its browser process ran out of memory seconds after the export began.
+   The mix was packed into one WAV of the whole timeline, about 0.8 GB, held twice, and posted as one body). Now the
+   WAV is written a few megabytes at a time and each part is posted before the next is made: nothing the size of
+   the timeline is ever built or sent. The server appends the parts (POST /api/export/audio?id=&part=N&last=0|1). */
+const AUDIO_PART_FRAMES = 1 << 20;            // about 22 s of 48 kHz sound, 4 MB of 16-bit stereo, per part
+function wavHeader(ch, sr, frames) {
+  const data = frames * ch * 2, ab = new ArrayBuffer(44), v = new DataView(ab);
   const wstr = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
-  wstr(0, "RIFF"); v.setUint32(4, bytes - 8, true); wstr(8, "WAVE");
+  wstr(0, "RIFF"); v.setUint32(4, Math.min(0xffffffff, 36 + data), true); wstr(8, "WAVE");
   wstr(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
   v.setUint16(22, ch, true); v.setUint32(24, sr, true);
   v.setUint32(28, sr * ch * 2, true); v.setUint16(32, ch * 2, true); v.setUint16(34, 16, true);
-  wstr(36, "data"); v.setUint32(40, len * ch * 2, true);
+  wstr(36, "data"); v.setUint32(40, Math.min(0xffffffff, data), true);
+  return new Uint8Array(ab);
+}
+/** 16-bit PCM of frames [from, to) of an AudioBuffer (interleaved), with the WAV header in front when from is 0. */
+function wavPart(buf, from, to) {
+  const ch = buf.numberOfChannels, n = Math.max(0, to - from);
+  const head = from === 0 ? wavHeader(ch, buf.sampleRate, buf.length) : null;
+  const out = new Uint8Array((head ? head.length : 0) + n * ch * 2), v = new DataView(out.buffer);
+  if (head) out.set(head, 0);
   const chans = []; for (let c = 0; c < ch; c++) chans.push(buf.getChannelData(c));
-  let o = 44;
-  for (let i = 0; i < len; i++) for (let c = 0; c < ch; c++) {
+  let o = head ? head.length : 0;
+  for (let i = from; i < to; i++) for (let c = 0; c < ch; c++) {
     const s = clamp(chans[c][i], -1, 1);
     v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true); o += 2;
   }
-  return new Blob([ab], { type: "audio/wav" });
+  return out;
+}
+async function uploadExportAudio(sessId, buf, signal, onPart) {
+  const parts = Math.max(1, Math.ceil(buf.length / AUDIO_PART_FRAMES));
+  for (let k = 0; k < parts; k++) {
+    const body = wavPart(buf, k * AUDIO_PART_FRAMES, Math.min(buf.length, (k + 1) * AUDIO_PART_FRAMES));
+    const r = await fetch(`/api/export/audio?id=${encodeURIComponent(sessId)}&part=${k}&last=${k === parts - 1 ? 1 : 0}`,
+      { method: "POST", body, signal });
+    if (!r.ok) throw new Error("audio upload failed");
+    if (onPart) onPart((k + 1) / parts);
+  }
 }
 /* Mix all audio-bearing clips offline through the same graph as preview
    (clip chains → track buses → master fader), honoring volume / pan keyframes
@@ -17723,7 +17745,7 @@ async function renderAudioMix(t0, t1) {
       off.suspend(when).then(() => { for (const run of animated) run(t0 + when); off.resume(); });
     }
   }
-  return encodeWAV(await off.startRendering());
+  return off.startRendering();        // the rendered sound: uploadExportAudio() packs and posts it in parts
 }
 /* Frame-exact asset prep for the fast exporter: rasterize the SVG frame for
    this exact time, and refresh AI person masks synchronously. */
@@ -17789,8 +17811,9 @@ async function fastExport(opts = {}) {
     const rgba = begin.input === "rgba";
     exportFullCanvas = !!delivery;
     if (wav) {
-      const r = await fetch("/api/export/audio?id=" + sessId, { method: "POST", body: wav, signal });
-      if (!r.ok) throw new Error("audio upload failed");
+      els.exportTitle.textContent = "Sending the audio mix…";
+      await uploadExportAudio(sessId, wav, signal, (f) => { els.exportProgress.style.width = (f * 100).toFixed(1) + "%"; });
+      els.exportProgress.style.width = "0%";
     }
     await loadProjectFonts();
     resetExportCanvases();
@@ -18477,8 +18500,9 @@ async function webCodecsExport() {
     if (!begin.id) throw new Error(begin.error || "export begin failed");
     sessId = begin.id;
     if (wav) {
-      const r = await fetch("/api/export/audio?id=" + sessId, { method: "POST", body: wav, signal });
-      if (!r.ok) throw new Error("audio upload failed");
+      els.exportTitle.textContent = "Sending the audio mix…";
+      await uploadExportAudio(sessId, wav, signal, (f) => { els.exportProgress.style.width = (f * 100).toFixed(1) + "%"; });
+      els.exportProgress.style.width = "0%";
     }
     up = createExportUploader(sessId, {
       batchItems: 12, batchBytes: 128 * 1024, signal,
