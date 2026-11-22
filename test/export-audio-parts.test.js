@@ -28,7 +28,9 @@ test("the audio mix is appended part by part and only counts once the last part 
   assert.ok(sess.id, JSON.stringify(sess));
   const parts = [Buffer.alloc(300000, 1), Buffer.alloc(300000, 2), Buffer.alloc(1234, 3)];
   assert.equal((await audio(base, sess.id, "&part=1&last=0", parts[1])).status, 409);           // out of order: refused
-  assert.equal((await audio(base, sess.id, "&part=0&last=0", parts[0])).status, 200);
+  const first = await audio(base, sess.id, "&part=0&last=0", parts[0]);
+  assert.equal(first.status, 200);
+  assert.equal((await first.json()).part, 0);                 // the page checks this: a server that appends says which part it took
   assert.equal((await audio(base, sess.id, "&part=0&last=0", parts[0])).status, 409);           // the same part twice: refused
   // not complete yet: a frame is still told the audio has not been uploaded
   const early = await fetch(`${base}/api/export/frame?id=${sess.id}`, { method: "POST", body: Buffer.from([0, 0, 0, 1]) });
@@ -56,6 +58,7 @@ test("the page packs the mix in parts and never as one block", () => {
   assert.equal((js.match(/await uploadExportAudio\(sessId, wav, signal/g) || []).length, 2);   // both export routes
   assert.ok(!/api\/export\/audio\?id=" \+ sessId, \{ method: "POST", body: wav/.test(js));     // no single-body upload left
   assert.ok(!js.includes("return encodeWAV(await off.startRendering())"));
+  assert.ok(js.includes(").part !== k)") && js.includes("The Editor's server is older than this page"));   // an old server is refused, not trusted
   // the WAV part encoder: header only on the first part, 16-bit little-endian, interleaved
   const src = js.slice(js.indexOf("function wavHeader("), js.indexOf("async function uploadExportAudio("));
   const clamp = (x, a, b) => Math.min(b, Math.max(a, x));

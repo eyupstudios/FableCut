@@ -17659,6 +17659,9 @@ async function uploadExportAudio(sessId, buf, signal, onPart) {
     const r = await fetch(`/api/export/audio?id=${encodeURIComponent(sessId)}&part=${k}&last=${k === parts - 1 ? 1 : 0}`,
       { method: "POST", body, signal });
     if (!r.ok) throw new Error("audio upload failed");
+    // a server from before the parts would keep only the last part and say ok: never export with that
+    if (k < parts - 1 && (await r.json().catch(() => ({}))).part !== k)
+      throw new Error("The Editor's server is older than this page. Close Create Summat and open it again, then export.");
     if (onPart) onPart((k + 1) / parts);
   }
 }
