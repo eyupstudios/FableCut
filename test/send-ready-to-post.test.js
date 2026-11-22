@@ -20,12 +20,12 @@ test("the Export dialog has the box, hidden until the editor knows it is inside 
 test("every export route hands the file over (and only then skips the download)", () => {
   assert.equal((js.match(/if \(!sendToReadyToPost\(end\.src\)\)/g) || []).length, 3);   // delivery, plain, WebCodecs
   const fn = js.slice(js.indexOf("function sendToReadyToPost("), js.indexOf("/* The export's audio mix goes to the server in PARTS"));
-  assert.ok(fn.includes('source: "fablecut", type: "exported"') && fn.includes("window.parent.postMessage("));
+  assert.ok(fn.includes('source: "fablecut", type: "exported"') && fn.includes("hostWindow().postMessage("));
   assert.ok(fn.includes("!box.checked") && fn.includes("return false"));
   // the message: the box unticked or no host -> nothing sent, the download happens as before
   const posted = [];
-  const make = (hosted, checked) => new Function("window", "$", "project", "toast", "inCreateSummat",
-    fn + "; return sendToReadyToPost;")({ parent: { postMessage: (m) => posted.push(m) } }, () => ({ checked }), { name: "Mission 2 edit" }, () => {}, () => hosted);
+  const make = (hosted, checked) => new Function("hostWindow", "$", "project", "toast", "inCreateSummat",
+    fn + "; return sendToReadyToPost;")(() => ({ postMessage: (m) => posted.push(m) }), () => ({ checked }), { name: "Mission 2 edit" }, () => {}, () => hosted);
   assert.equal(make(true, true)("/exports/Mission%202%20edit.mp4"), true);
   assert.deepEqual(posted, [{ source: "fablecut", type: "exported", project: "Mission 2 edit", file: "Mission 2 edit.mp4" }]);
   assert.equal(make(true, false)("/exports/x.mp4"), false);
