@@ -17622,6 +17622,30 @@ async function seekVideosTo(t, { queueBusy } = {}) {
   }
   prefetchExportVideos(t);
 }
+/* The export window always says where things stand (22 Nov 2026: "export progress (bar, time left, where the file
+   goes) always stays visible"): under the bar, the time left worked out from the pace so far, and where the finished
+   file goes (the server says, when the export begins). */
+let exportClock = null;
+function exportTimeLeft(seconds) {
+  if (!(seconds >= 0) || !isFinite(seconds)) return "";
+  if (seconds < 10) return "nearly done";
+  if (seconds < 90) return `about ${Math.round(seconds / 10) * 10} s left`;
+  const m = Math.round(seconds / 60);
+  return m < 60 ? `about ${m} min left` : `about ${Math.floor(m / 60)} h ${m % 60} min left`;
+}
+function exportStatusBegin(where) {
+  exportClock = { t0: performance.now(), where: String(where || "") };
+  exportStatus(0);
+}
+function exportStatus(frac) {
+  const el = $("exportEta");
+  if (!el || !exportClock) return;
+  const dt = (performance.now() - exportClock.t0) / 1000;
+  const left = frac >= 0.005 && dt >= 4 ? exportTimeLeft(dt * (1 - frac) / frac) : "working out the time left…";
+  const rtp = $("sendRtp") && $("sendRtp").checked && inCreateSummat() ? ", then to Ready to post" : "";
+  el.textContent = left + (exportClock.where ? ` · the file goes to ${exportClock.where}${rtp}` : "");
+}
+function exportStatusEnd() { exportClock = null; const el = $("exportEta"); if (el) el.textContent = ""; }
 /* "Send to Ready to post" (22 Nov 2026, inside Create Summat's window): when an export is done and the box is
    ticked, Create Summat (the page this editor sits in) is told the file's name; it writes the Ready to post page
    (titles, description, chapters, tags, thumbnail) and opens it. Returns true when it was handed over, so the
@@ -17832,6 +17856,7 @@ async function fastExport(opts = {}) {
     }).then((r) => r.json());
     if (!begin.id) throw new Error(begin.error || "export begin failed");
     sessId = begin.id;
+    exportStatusBegin(begin.file || (begin.outputs && begin.outputs[0] && begin.outputs[0].file) || "");
     const jpegQ = delivery ? begin.jpegQuality ?? 0.95 : exportProfileMeta(profileId).jpegQuality ?? 0.95;
     const rgba = begin.input === "rgba";
     exportFullCanvas = !!delivery;
@@ -17907,6 +17932,7 @@ async function fastExport(opts = {}) {
       const pct = ((f + 1) / frames) * 100;
       els.exportProgress.style.width = pct.toFixed(1) + "%";
       els.exportTitle.textContent = `Rendering… ${pct.toFixed(0)}%`;
+      exportStatus((f + 1) / frames);
       if (opts.onProgress) opts.onProgress(0.97 * (f + 1) / frames);
       if (job) reportExportJob(job, { progress: 0.97 * (f + 1) / frames });
     }
@@ -18526,6 +18552,7 @@ async function webCodecsExport() {
     }).then((r) => r.json());
     if (!begin.id) throw new Error(begin.error || "export begin failed");
     sessId = begin.id;
+    exportStatusBegin(begin.file || "");
     if (wav) {
       els.exportTitle.textContent = "Sending the audio mix…";
       await uploadExportAudio(sessId, wav, signal, (f) => { els.exportProgress.style.width = (f * 100).toFixed(1) + "%"; });
@@ -18600,6 +18627,7 @@ async function webCodecsExport() {
       const pct = ((f + 1) / frames) * 100;
       els.exportProgress.style.width = pct.toFixed(1) + "%";
       els.exportTitle.textContent = `Encoding… ${pct.toFixed(0)}%`;
+      exportStatus((f + 1) / frames);
     }
     els.exportTitle.textContent = "Finishing…";
     await encoder.flush();
@@ -18682,6 +18710,7 @@ async function startExport() {
   syncPlayButton();
 }
 function finishExport(keep) {
+  exportStatusEnd();
   if (!state.exporting) return;
   state.exporting = false;
   releaseOriginalPlayers();

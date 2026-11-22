@@ -33,3 +33,14 @@ test("every export route hands the file over (and only then skips the download)"
   assert.equal(make(true, true)(""), false);
   assert.equal(posted.length, 1);
 });
+
+test("the export window says the time left and where the file goes", async () => {
+  assert.ok(html.includes('id="exportEta"'));
+  assert.equal((js.match(/exportStatus\(\(f \+ 1\) \/ frames\);/g) || []).length, 2);      // both fast routes
+  assert.equal((js.match(/exportStatusBegin\(begin\.file/g) || []).length, 2);
+  const src = js.slice(js.indexOf("function exportTimeLeft("), js.indexOf("function exportStatusBegin("));
+  const left = new Function(src + "; return exportTimeLeft;")();
+  assert.deepEqual([4, 47, 600, 4000, NaN].map(left), ["nearly done", "about 50 s left", "about 10 min left", "about 1 h 7 min left", ""]);
+  const server = fs.readFileSync(path.join(__dirname, "..", "server.js"), "utf8");
+  assert.ok(server.includes("return { id, mode: m, file: outPath };") && server.includes("summary: profileSummary(profile), file: outPath };"));
+});

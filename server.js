@@ -447,7 +447,7 @@ async function beginExport(fps, name, profileId, hasAudio, mode, extra = {}) {
     };
     sess.writeLock = Promise.resolve();
     exportSessions.set(id, sess);
-    return { id, mode: m };
+    return { id, mode: m, file: outPath };          // where the finished file goes (the export window says so)
   }
 
   const profile = resolveProfile(profileId);
@@ -466,7 +466,7 @@ async function beginExport(fps, name, profileId, hasAudio, mode, extra = {}) {
   };
   sess.writeLock = Promise.resolve();
   exportSessions.set(id, sess);
-  return { id, mode: m, profile: profile.id, label: profile.label, summary: profileSummary(profile) };
+  return { id, mode: m, profile: profile.id, label: profile.label, summary: profileSummary(profile), file: outPath };
 }
 /* Encode into the paths reserved at /begin; rename .part → final on clean exit
    so an aborted render never leaves something that looks like a finished file. */

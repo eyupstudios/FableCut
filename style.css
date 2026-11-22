@@ -4648,3 +4648,4 @@ body.hosted .logo span { display: none; }
 .send-rtp { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 2px; cursor: pointer; }
 .send-rtp input { width: 16px; height: 16px; }
 .send-rtp.hidden { display: none; }
+.export-eta { margin: 8px 0 0; min-height: 1.3em; word-break: break-word; }
