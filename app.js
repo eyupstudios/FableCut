@@ -17782,8 +17782,28 @@ function exportStatus(frac) {
   const left = frac >= 0.005 && dt >= 4 ? exportTimeLeft(dt * (1 - frac) / frac) : "working out the time left…";
   const rtp = $("sendRtp") && $("sendRtp").checked && inCreateSummat() ? ", then to Ready to post" : "";
   el.textContent = left + (exportClock.where ? ` · the file goes to ${exportClock.where}${rtp}` : "");
+  exportTell("running", frac, { stage: "drawn frame by frame in the Editor" });
 }
 function exportStatusEnd() { exportClock = null; const el = $("exportEta"); if (el) el.textContent = ""; }
+/* Inside Create Summat an export here is one of ITS jobs too (22 Nov 2026: "every job shows in one place that's
+   always visible ... Never leave me guessing"): the host is told when it starts, how far it is (once a second), and
+   how it ended. Outside Create Summat nothing is sent. */
+let exportJob = null;
+function exportTell(state, frac, extra) {
+  try {
+    const host = hostWindow();
+    if (!host) return;
+    if (state === "start") { exportJob = { id: Date.now().toString(36), t0: performance.now(), last: -1e9, frac: 0 }; state = "running"; }
+    if (!exportJob) return;
+    const now = performance.now();
+    if (frac != null) exportJob.frac = frac;
+    if (state === "running" && frac != null && now - exportJob.last < 1000) return;
+    exportJob.last = now;
+    host.postMessage({ source: "fablecut", type: "export-progress", id: exportJob.id, title: project.name || "export", state,
+      frac: exportJob.frac, elapsed: (now - exportJob.t0) / 1000, ...(extra || {}) }, "*");
+    if (state !== "running") exportJob = null;
+  } catch { /* telling the host must never break an export */ }
+}
 /* "Send to Ready to post" (22 Nov 2026, inside Create Summat's window): when an export is done and the box is
    ticked, Create Summat (the page this editor sits in) is told the file's name; it writes the Ready to post page
    (titles, description, chapters, tags, thumbnail) and opens it. Returns true when it was handed over, so the
@@ -17975,6 +17995,7 @@ async function fastExport(opts = {}) {
   const setError = (err) => { if (!uploadError) uploadError = err; };
   try {
     els.exportTitle.textContent = "Mixing audio…";
+    exportTell("start", 0, { stage: "mixing the audio" });
     const wav = await renderAudioMix(t0, t1);
     if (renderCancelled) throw new Error("cancelled");
     const profileId = opts.profile || effectiveEncodeProfileId();
@@ -18087,6 +18108,7 @@ async function fastExport(opts = {}) {
     const end = await fetch("/api/export/end?id=" + sessId, { method: "POST", signal }).then((r) => r.json());
     if (!end.src) throw new Error(end.error || "encode failed");
     exportPaceRecord(frames, paceQ);
+    exportTell("done", 1);
     const outs = end.outputs || [{ file: decodeURIComponent(end.src.split("/").pop()), ok: true, src: end.src }];
     // what each output was asked to be, beside what came out
     result = { outputs: outs.map((o, i) => ({ ...o, ...(begin.outputs && begin.outputs[i] ? { summary: begin.outputs[i].summary, notes: begin.outputs[i].notes } : {}) })) };
@@ -18115,6 +18137,7 @@ async function fastExport(opts = {}) {
   } catch (e) {
     if (sessId) fetch("/api/export/end?id=" + sessId + "&discard=1", { method: "POST" }).catch(() => { });
     const msg = e?.name === "AbortError" ? "cancelled" : String(e.message || e);
+    exportTell(msg === "cancelled" ? "cancelled" : "failed", null, { error: msg });
     result = { error: msg, cancelled: msg === "cancelled" };
     if (job) await reportExportJob(job, { status: "failed", error: msg }, true);
     else if (msg !== "cancelled" && !opts.silent) alert("Export failed: " + msg);
@@ -18678,6 +18701,7 @@ async function webCodecsExport() {
   let up = null;
   try {
     els.exportTitle.textContent = "Mixing audio…";
+    exportTell("start", 0, { stage: "mixing the audio" });
     const wav = await renderAudioMix(t0, t1);
     if (renderCancelled) throw new Error("cancelled");
 
@@ -18778,6 +18802,7 @@ async function webCodecsExport() {
     encoder = null;
     const end = await fetch("/api/export/end?id=" + sessId, { method: "POST", signal }).then((r) => r.json());
     if (!end.src) throw new Error(end.error || "mux failed");
+    exportTell("done", 1);
     if (!sendToReadyToPost(end.src)) {
       const a = document.createElement("a");
       a.href = end.src;
@@ -18788,6 +18813,7 @@ async function webCodecsExport() {
     try { encoder?.close(); } catch { }
     if (sessId) fetch("/api/export/end?id=" + sessId + "&discard=1", { method: "POST" }).catch(() => { });
     const msg = e?.name === "AbortError" ? "cancelled" : String(e.message || e);
+    exportTell(msg === "cancelled" ? "cancelled" : "failed", null, { error: msg });
     if (msg !== "cancelled") alert("Export failed: " + msg);
   } finally {
     exportAbort = null;

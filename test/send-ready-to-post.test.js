@@ -44,3 +44,26 @@ test("the export window says the time left and where the file goes", async () =>
   const server = fs.readFileSync(path.join(__dirname, "..", "server.js"), "utf8");
   assert.ok(server.includes("return { id, mode: m, file: outPath };") && server.includes("summary: profileSummary(profile), file: outPath };"));
 });
+
+test("an export in the editor reports itself to its host: start, progress once a second, and how it ended", () => {
+  const src = js.slice(js.indexOf("let exportJob = null;"), js.indexOf("/* \"Send to Ready to post\" (22 Nov 2026"));
+  const sent = [];
+  let now = 0;
+  const tell = new Function("hostWindow", "performance", "project", src + "; return exportTell;")(
+    () => ({ postMessage: (m) => sent.push(m) }), { now: () => now }, { name: "Part 3" });
+  tell("running", 0.5);                                  // nothing started: nothing said
+  tell("start", 0, { stage: "mixing the audio" });
+  now = 300; tell("running", 0.1);                       // inside the same second: kept back
+  now = 1500; tell("running", 0.2);
+  now = 9000; tell("done", 1);
+  tell("running", 0.9);                                  // over: nothing more
+  assert.deepEqual(sent.map((m) => [m.type, m.state, m.frac, Math.round(m.elapsed)]),
+    [["export-progress", "running", 0, 0], ["export-progress", "running", 0.2, 2], ["export-progress", "done", 1, 9]]);
+  assert.ok(sent.every((m) => m.source === "fablecut" && m.title === "Part 3" && m.id === sent[0].id));
+  assert.equal((js.match(/exportTell\("start", 0/g) || []).length, 2);
+  assert.equal((js.match(/exportTell\(msg === "cancelled" \? "cancelled" : "failed"/g) || []).length, 2);
+  assert.equal((js.match(/exportTell\("done", 1\)/g) || []).length, 2);
+  const none = new Function("hostWindow", "performance", "project", src + "; return exportTell;")(() => null, { now: () => 0 }, { name: "x" });
+  none("start", 0);                                      // outside Create Summat: nothing is sent, nothing breaks
+});
+
