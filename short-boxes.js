@@ -24,7 +24,8 @@
 
   function normalize(list) {
     return (Array.isArray(list) ? list : []).filter((b) => b && typeof b === "object" && isFinite(+b.start)).slice(0, 50)
-      .map((b, i) => ({ ...clamp(b, 0), id: String(b.id || "sb" + (i + 1)), name: String(b.name || "").slice(0, 80) }));
+      .map((b, i) => ({ ...clamp(b, 0), id: String(b.id || "sb" + (i + 1)), name: String(b.name || "").slice(0, 80) }))
+      .map((b, i, all) => all.findIndex((x) => x.id === b.id) < i ? { ...b, id: b.id + "_" + (i + 1) } : b);   // ids are unique
   }
 
   /** The footage under a box: the video clips on the lowest video lane that has any, each cut to the box, as
@@ -61,7 +62,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   window.addShortBox = function addShortBox() {
     const boxes = ShortBoxes.normalize(project.shortBoxes);
     const end = typeof projDur === "function" ? projDur() : 0;
-    const b = ShortBoxes.clamp({ id: "sb" + Date.now().toString(36), start: state.time, dur: ShortBoxes.DEFAULT, name: "" }, end);
+    const b = ShortBoxes.clamp({ id: "sb" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), start: state.time, dur: ShortBoxes.DEFAULT, name: "" }, end);
     if (typeof pushUndo === "function") pushUndo();
     project.shortBoxes = boxes.concat([b]);
     scheduleSave();
