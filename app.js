@@ -6764,11 +6764,20 @@ window.addEventListener("drop", (e) => {
 });
 
 /* ── Zoom ── */
-function setZoom(pps, anchorClientX) {
+/* 23 Nov (Steve): every zoom (the slider, Ctrl+scroll, + / -) happens around the red playhead, which keeps its place on
+   screen; when it is out of view the zoom brings it to the middle. `anchorClientX` is kept for callers that ask for a
+   point on purpose (none of the zoom controls do any more). */
+function zoomAnchor(anchorClientX) {
   const scroller = els.timelineScroll;
   const rect = scroller.getBoundingClientRect();
-  const ax = anchorClientX != null ? anchorClientX - rect.left : rect.width / 2;
-  const tAtAnchor = (scroller.scrollLeft + ax) / state.pps;
+  if (anchorClientX != null) return { ax: anchorClientX - rect.left, t: (scroller.scrollLeft + anchorClientX - rect.left) / state.pps };
+  const t = Math.max(0, +state.time || 0), x = t * state.pps - scroller.scrollLeft;
+  const visible = x >= 0 && x <= scroller.clientWidth;
+  return { ax: visible ? x : scroller.clientWidth / 2, t };
+}
+function setZoom(pps, anchorClientX) {
+  const scroller = els.timelineScroll;
+  const { ax, t: tAtAnchor } = zoomAnchor(anchorClientX);
   state.pps = clamp(pps, ZOOM_MIN, ZOOM_MAX);
   els.zoomSlider.value = state.pps;
   state.dirtyTimeline = true;
@@ -6819,7 +6828,7 @@ $("btnAddA").addEventListener("click", () => addTimelineTrack("audio"));
 els.timelineScroll.addEventListener("wheel", (e) => {
   if (e.ctrlKey || e.metaKey) {
     e.preventDefault();
-    setZoom(state.pps * (e.deltaY < 0 ? 1.15 : 1 / 1.15), e.clientX);
+    setZoom(state.pps * (e.deltaY < 0 ? 1.15 : 1 / 1.15));          // around the playhead, not the mouse (23 Nov)
   }
 }, { passive: false });
 
