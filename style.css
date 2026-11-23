@@ -4703,3 +4703,14 @@ body.hosted .logo span { display: none; }
 .short-box .sb-h { position: absolute; top: 0; bottom: 0; width: 8px; cursor: ew-resize; background: rgba(182,242,58,.35); }
 .short-box .sb-h.l { left: -2px; border-radius: 6px 0 0 6px; } .short-box .sb-h.r { right: -2px; border-radius: 0 6px 6px 0; }
 
+
+/* Project tabs along the top (23 Nov): like browser tabs, the open one highlighted; they scroll inside their strip */
+.pj-tabs { display: flex; gap: 2px; align-items: flex-end; flex: 1 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; margin: 0 8px; scrollbar-width: thin; }
+.pj-tabs:empty { display: none; }
+.pj-tab { display: inline-flex; align-items: center; gap: 4px; flex: 0 1 auto; min-width: 70px; max-width: 220px; padding: 4px 6px 4px 10px; border: 1px solid var(--border, #2a3a55); border-bottom: none; border-radius: 7px 7px 0 0; background: rgba(255,255,255,.04); color: var(--dim); font-size: 12px; cursor: pointer; white-space: nowrap; }
+.pj-tab:hover { background: rgba(255,255,255,.08); color: var(--text); }
+.pj-tab.on { background: var(--accent); border-color: var(--accent); color: #0b1a05; font-weight: 700; cursor: default; }
+.pj-tab-name { overflow: hidden; text-overflow: ellipsis; }
+.pj-tab-x { border: none; background: none; color: inherit; font-size: 14px; line-height: 1; padding: 0 3px; border-radius: 4px; cursor: pointer; opacity: .7; }
+.pj-tab-x:hover { opacity: 1; background: rgba(255,255,255,.12); }
+body.has-tabs .topbar-center { flex: 0 1 auto; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }

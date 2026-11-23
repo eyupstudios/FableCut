@@ -19271,6 +19271,71 @@ function syncUndoButtons() {
   if (r) { const off = !runtime.redo.length; if (r.disabled !== off) r.disabled = off; }
 }
 setInterval(syncUndoButtons, 250);
+/* Project tabs along the top (23 Nov, Steve: "Add project tabs along the top of the Editor (like browser tabs), current
+   one highlighted"). A project gets a tab when it is opened here (by you, or by Create Summat's Open in Editor); click
+   a tab to switch to it (the open one is saved first), × closes the tab only, never the project. */
+const TABS_KEY = "fablecut-project-tabs";
+let tabNames = {}, tabsSeen = "", tabActive = "", tabAsked = 0;
+/** The open project's id: the editor's own once it knows it, else what the server says is open (asked now and then). */
+async function tabCurrentId() {
+  if (runtime.projectId && runtime.projectId !== "?") return runtime.projectId;
+  if (Date.now() - tabAsked > 4000) {
+    tabAsked = Date.now();
+    try { const d = await (await fetch("/api/projects?archived=include", { cache: "no-store" })).json(); tabActive = d.active || ""; } catch { }
+  }
+  return tabActive;
+}
+function tabIds() {
+  try { const a = JSON.parse(localStorage.getItem(TABS_KEY) || "[]"); return Array.isArray(a) ? a.filter((x) => typeof x === "string" && x) : []; }
+  catch { return []; }
+}
+function saveTabIds(a) { try { localStorage.setItem(TABS_KEY, JSON.stringify(a.slice(-12))); } catch { } }
+async function readTabNames() {
+  try {
+    const r = await fetch("/api/projects?archived=include", { cache: "no-store" });
+    const d = await r.json();
+    tabNames = Object.fromEntries((d.projects || []).map((p) => [p.id, p.name]));
+    tabActive = d.active || tabActive;
+    return d.projects || [];
+  } catch { return null; }
+}
+async function syncProjectTabs() {
+  if (!state.connected) return;
+  const id = await tabCurrentId();
+  if (!id) return;
+  const key = id + "|" + project.name;
+  if (key === tabsSeen) return;
+  const switched = !tabsSeen.startsWith(id + "|");
+  tabsSeen = key;
+  let ids = tabIds();
+  if (!ids.includes(id)) ids.push(id);
+  if (switched && (await readTabNames())) ids = ids.filter((x) => x === id || tabNames[x]);   // deleted projects drop out
+  saveTabIds(ids);
+  renderProjectTabs(ids);
+}
+function renderProjectTabs(ids = tabIds()) {
+  const nav = $("pjTabs");
+  if (!nav) return;
+  document.body.classList.toggle("has-tabs", ids.length > 0);
+  nav.innerHTML = ids.map((x) => {
+    const on = x === (runtime.projectId && runtime.projectId !== "?" ? runtime.projectId : tabActive), n = on ? project.name : tabNames[x] || "Project";
+    return `<span class="pj-tab${on ? " on" : ""}" data-tab="${escapeHtml(x)}" role="tab" aria-selected="${on}" title="${escapeHtml(n)}${on ? " (open now)" : " · click to switch to it"}">`
+      + `<span class="pj-tab-name">${escapeHtml(n)}</span>`
+      + (on ? "" : `<button type="button" class="pj-tab-x" data-tabx="${escapeHtml(x)}" aria-label="Close this tab" title="Close this tab (the project is kept)">×</button>`) + `</span>`;
+  }).join("");
+  nav.querySelector(".pj-tab.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+$("pjTabs")?.addEventListener("click", async (e) => {
+  const x = e.target.closest("[data-tabx]");
+  if (x) { e.stopPropagation(); saveTabIds(tabIds().filter((id) => id !== x.dataset.tabx)); renderProjectTabs(); return; }
+  const t = e.target.closest("[data-tab]");
+  if (!t || t.classList.contains("on")) return;
+  const list = await readTabNames();
+  if (!list || !list.some((p) => p.id === t.dataset.tab)) { toast("That project is no longer there"); saveTabIds(tabIds().filter((id) => id !== t.dataset.tab)); renderProjectTabs(); return; }
+  pj.list = list;
+  pjOpenProject(t.dataset.tab);
+});
+setInterval(syncProjectTabs, 1000);
 $("xsSmooth")?.addEventListener("change", () => { try { xsRender(); } catch {} });
 $("btnHome").addEventListener("click", gotoTransportHome);
 $("btnEnd").addEventListener("click", gotoTransportEnd);
