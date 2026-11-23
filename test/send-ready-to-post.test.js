@@ -10,28 +10,38 @@ const path = require("node:path");
 const js = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
 const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
 
-test("the Export dialog has the box, hidden until the editor knows it is inside Create Summat", () => {
-  assert.ok(/<label class="send-rtp hidden" id="sendRtpRow"/.test(html) && /id="sendRtp" checked/.test(html));
-  assert.ok(html.indexOf('id="sendRtpRow"') < html.indexOf('id="btnStartExport"'));
-  assert.ok(js.includes("function initSendToReadyToPost()") && js.includes("initSendToReadyToPost();"));
-  assert.ok(js.includes("if (!row || !box || !inCreateSummat()) return;"));
+test("the Export window: Cancel / Add to queue / Download / Export to Ready to post, no tick box, where the file goes", () => {
+  // 23 Nov (Steve): "Remove the 'Send to Ready to post' tick box: every export goes to Library + Ready to post anyway"
+  assert.ok(!html.includes('id="sendRtp"') && !js.includes('$("sendRtp")'));
+  const order = ["btnCancelSetup", "btnQueueExport", "btnDownloadExport", "btnStartExport"].map((id) => html.indexOf(`id="${id}"`));
+  assert.ok(order.every((i, k) => i > 0 && (k === 0 || i > order[k - 1])), String(order));
+  assert.ok(/class="btn primary" id="btnStartExport"/.test(html) && html.indexOf('id="xsWhere"') > order[3]);
+  const init = js.slice(js.indexOf("function initSendToReadyToPost()"), js.indexOf("async function downloadExport()"));
+  for (const need of ['"Export to Ready to post" : "Export"', '$("btnDownloadExport")?.classList.toggle("hidden", !cs)', "Export to Ready to post:</b>",
+    "Download:</b> all of that, plus a copy in", "Create Summat's Library", 'askHost("where"'])
+    assert.ok(init.includes(need), need);
+  const dl = js.slice(js.indexOf("async function downloadExport()"), js.indexOf("function sendToReadyToPost("));
+  for (const need of ['askHost("choose-folder", { start: getSetting("downloadFolder")', 'setSetting("downloadFolder", r.path)', "pendingDownload = { folder: r.path }", "startChosenExport()"])
+    assert.ok(dl.includes(need), need);
+  assert.ok(/downloadFolder: "",/.test(js));                       // kept between sessions (setSetting only keeps listed keys)
+  assert.ok(js.includes("send: true, copy_to: copy }"));          // the fast render: always to Ready to post, the copy if asked
 });
 
-test("every export route hands the file over (and only then skips the download)", () => {
+test("every export route hands the file over (and only then skips the download), with Download's folder", () => {
   assert.equal((js.match(/if \(!sendToReadyToPost\(end\.src\)\)/g) || []).length, 3);   // delivery, plain, WebCodecs
   const fn = js.slice(js.indexOf("function sendToReadyToPost("), js.indexOf("/* The export's audio mix goes to the server in PARTS"));
   assert.ok(fn.includes('source: "fablecut", type: "exported"') && fn.includes("hostWindow().postMessage("));
-  assert.ok(fn.includes("!box.checked") && fn.includes("return false"));
-  // the message: the box unticked or no host -> nothing sent, the download happens as before
   const posted = [];
-  const make = (hosted, checked) => new Function("hostWindow", "$", "project", "toast", "inCreateSummat",
-    fn + "; return sendToReadyToPost;")(() => ({ postMessage: (m) => posted.push(m) }), () => ({ checked }), { name: "Mission 2 edit" }, () => {}, () => hosted);
-  assert.equal(make(true, true)("/exports/Mission%202%20edit.mp4"), true);
-  assert.deepEqual(posted, [{ source: "fablecut", type: "exported", project: "Mission 2 edit", file: "Mission 2 edit.mp4" }]);
-  assert.equal(make(true, false)("/exports/x.mp4"), false);
-  assert.equal(make(false, true)("/exports/x.mp4"), false);
-  assert.equal(make(true, true)(""), false);
-  assert.equal(posted.length, 1);
+  const make = (hosted, folder) => new Function("hostWindow", "project", "toast", "inCreateSummat", "folder",
+    "let pendingDownload = folder ? { folder } : null;" + fn + "; return sendToReadyToPost;")(
+    () => ({ postMessage: (m) => posted.push(m) }), { name: "Mission 2 edit" }, () => {}, () => hosted, folder);
+  assert.equal(make(true)("/exports/Mission%202%20edit.mp4"), true);
+  assert.equal(make(true, "D:\\Videos")("/exports/x.mp4"), true);
+  assert.deepEqual(posted, [{ source: "fablecut", type: "exported", project: "Mission 2 edit", file: "Mission 2 edit.mp4", copy_to: "" },
+    { source: "fablecut", type: "exported", project: "Mission 2 edit", file: "x.mp4", copy_to: "D:\\Videos" }]);
+  assert.equal(make(false)("/exports/x.mp4"), false);              // outside Create Summat: the browser downloads it
+  assert.equal(make(true)(""), false);
+  assert.equal(posted.length, 2);
 });
 
 test("the export window says the time left and where the file goes", async () => {

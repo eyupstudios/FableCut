@@ -4669,6 +4669,7 @@ body.hosted .logo span { display: none; }
 /* 23 Nov: Smooth slow-mo on the Export window; the monitor's "Preview speed" button */
 .xs-smooth { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin: 6px 0 0; font-size: 12px; }
 .xs-smooth label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+.xs-smooth[hidden] { display: none; }   /* 23 Nov: display:flex was beating the hidden attribute */
 #btnSpeed .btn-cap { font-size: 11px; opacity: .8; }
 #btnSpeed #btnSpeedRate { margin-left: 5px; }
 #btnSpeed { width: auto; padding: 0 8px; white-space: nowrap; }
@@ -4677,3 +4678,19 @@ body.hosted .logo span { display: none; }
 .insp-speed .speed-quick { display: flex; gap: 4px; flex-wrap: wrap; }
 .insp-speed .speed-quick .btn.tiny { min-width: 44px; }
 .insp-speed .speed-quick .btn.tiny.on { border-color: var(--accent); background: #69BE2855; color: #fff; }
+
+/* Undo / Redo arrows in the top bar (23 Nov) */
+.undo-group { margin-left: 8px; }
+.undo-group .btn.tiny { font-size: 16px; line-height: 1; padding: 3px 10px; min-width: 34px; }
+.undo-group .btn:disabled { opacity: .35; cursor: default; }
+
+/* The level meter is a slim bar under the monitor, never over the picture (23 Nov) */
+#monitorStage > .vu-meter { display: none !important; }
+.slim-meter { display: flex; align-items: center; gap: 6px; padding: 2px 10px 0; cursor: pointer; min-height: 14px; }
+.slim-meter canvas { flex: 1; height: 10px; min-width: 40px; display: block; }
+.slim-meter-lab { font: 700 7px/5px ui-sans-serif, system-ui, sans-serif; color: #9BA3A9; }
+.slim-meter-val { font: 600 10px/1 ui-monospace, monospace; color: #9BA3A9; min-width: 58px; text-align: right; }
+
+/* Export window: where the file goes, under the buttons (23 Nov) */
+.xs-where { margin: 8px 2px 0; font-size: 12px; line-height: 1.5; color: #b9c2c8; }
+.xs-where b { color: #e8ecef; font-weight: 600; }

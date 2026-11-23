@@ -478,6 +478,10 @@ const DEFAULT_SETTINGS = {
   webCodecsBitrateMode: "variable", // "variable" | "constant"
   snapTargets: { clips: true, playhead: true, markers: true, inout: true, keyframes: false, frames: true },
   useProxies: true, // play proxies (when a file has one) while editing; export always reads the original
+  // 23 Nov: these were set but never kept (setSetting only keeps the keys listed here)
+  exportPace: null, // seconds one frame took at each quality, learned from finished exports
+  forceFrames: false, // Export > Advanced: always render frame by frame
+  downloadFolder: "", // Export > Download: the last folder a copy was saved in
 };
 let settings = { ...DEFAULT_SETTINGS };
 function loadSettings() {
@@ -4037,7 +4041,31 @@ function initProjectsUi() {
 /* Undo entries are {clips, markers} snapshots. Drag gestures still push a bare
    clips array (taken at pointerdown) — restoring one leaves markers alone. */
 function undoSnapshot() {
-  return JSON.stringify({ clips: project.clips, markers: project.markers || [], comps: project.comps || [] });
+  return JSON.stringify({ clips: project.clips, markers: project.markers || [], comps: project.comps || [], mix: mixSnapshot() });
+}
+/** The mixer's levels (23 Nov, Steve: "Every action undoable: ... volume"): each audio track's fader and pan, the
+ *  buses and the master. Undo / redo put them back with the clips. */
+function mixSnapshot() {
+  const tracks = {};
+  for (const t of (typeof TRACKS !== "undefined" ? TRACKS : [])) if (t.kind === "audio") tracks[t.id] = [+t.gain || 0, +t.pan || 0];
+  return { tracks, master: project.master || null, buses: project.buses || [] };
+}
+function restoreMix(mix) {
+  if (!mix || typeof mix !== "object") return;
+  let changed = false;
+  for (const t of (typeof TRACKS !== "undefined" ? TRACKS : [])) {
+    if (t.kind !== "audio" || !mix.tracks || !mix.tracks[t.id]) continue;
+    const [g, p] = mix.tracks[t.id];
+    if ((+t.gain || 0) !== g || (+t.pan || 0) !== p) changed = true;
+    if (g) t.gain = g; else delete t.gain;
+    if (p) t.pan = p; else delete t.pan;
+  }
+  if (JSON.stringify(project.master || null) !== JSON.stringify(mix.master)) { changed = true; if (mix.master) project.master = mix.master; else delete project.master; }
+  if (JSON.stringify(project.buses || []) !== JSON.stringify(mix.buses || [])) { changed = true; project.buses = mix.buses || []; }
+  if (!changed) return;
+  project.tracks = serializeTracks();
+  if (runtime.audio) { try { syncAudioGraphTracks(); applyMixLevels(runtime.audio, true); } catch {} }
+  if (typeof mixerState !== "undefined" && mixerState.open) renderMixer();
 }
 /** Record an undo step — `snap` lets an edit snapshot first and record only
  *  once it knows it changed something. */
@@ -4063,6 +4091,7 @@ function restoreSnapshot(json) {
   if (Array.isArray(snap)) project.clips = snap;
   else {
     project.clips = snap.clips; project.markers = snap.markers; if (snap.comps) project.comps = snap.comps;
+    if (snap.mix) restoreMix(snap.mix);
     if (snap.media) {
       const before = new Map(project.media.map((m) => [m.id, m.src]));
       project.media = snap.media;
@@ -4077,7 +4106,7 @@ function restoreSnapshot(json) {
  *  (removing, relinking or replacing media), so redo puts it back too. */
 function counterSnapshot(snap) {
   if (!snap.includes('"media":')) return undoSnapshot();
-  return JSON.stringify({ clips: project.clips, markers: project.markers || [], comps: project.comps || [], media: project.media,
+  return JSON.stringify({ clips: project.clips, markers: project.markers || [], comps: project.comps || [], mix: mixSnapshot(), media: project.media,
     ...(hasSeqClips(snap) ? { seqClips: otherSequenceClips() } : {}) });
 }
 /** The undo step for an edit made outside this tab (an agent, another tab): the timeline as it was
@@ -10091,11 +10120,17 @@ function renderMixer() {
     const fader = s.querySelector(".mix-fader");
     const dbIn = s.querySelector(".mix-db");
     const setDb = (db) => isMaster ? setMasterGain(db) : isBus ? setBusMix(id, { gain: db }) : setTrackMix(id, { gain: db });
+    // one undo step per grab of a fader or pan, per typed level, per reset (23 Nov: "Every action undoable")
+    for (const el of s.querySelectorAll(".mix-fader, .mix-pan")) {
+      el.addEventListener("pointerdown", () => pushUndo());
+      el.addEventListener("keydown", (e) => { if (!e.repeat && e.key.startsWith("Arrow")) pushUndo(); });
+      el.addEventListener("dblclick", () => pushUndo(), true);
+    }
     fader.addEventListener("input", () => setDb(faderPosToDb(fader.value)));
     fader.addEventListener("dblclick", () => setDb(0));
     dbIn.addEventListener("change", () => {
       const v = parseDbInput(dbIn.value);
-      if (v == null) syncMixerStrip(id); else setDb(v);
+      if (v == null) syncMixerStrip(id); else { pushUndo(); setDb(v); }
     });
     dbIn.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") dbIn.blur(); });
     if (isBus) {
@@ -10924,7 +10959,45 @@ function updateMeterUI(dt) {
     updateMeterChannel(id, target, dt, attack, release, now);
   }
   if (mixerState.open) paintMixerMeters();
+  paintSlimMeter();
 }
+/* The slim level bar under the monitor (23 Nov, Steve: "The volume meter on the side covers too much of the
+   video. Make it a slim bar under the monitor ... never over the picture"): the master's left / right, the same
+   readings and ballistics as the old meter, which is no longer drawn over the picture. */
+let slimLast = "";
+function paintSlimMeter() {
+  const cv = $("slimMeterCv");
+  if (!cv || !cv.isConnected) return;
+  const dpr = window.devicePixelRatio || 1, w = Math.max(10, Math.round(cv.clientWidth * dpr)), h = Math.round(10 * dpr);
+  const m = meterState.master;
+  const vals = [m.dispL ?? METER_DB_MIN, m.dispR ?? METER_DB_MIN, m.peakHoldL ?? METER_DB_MIN, m.peakHoldR ?? METER_DB_MIN];
+  const key = w + "|" + vals.map((v) => v.toFixed(1)).join("|") + "|" + meterState.mode;
+  if (key === slimLast) return;
+  slimLast = key;
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  const ctx = cv.getContext("2d");
+  ctx.clearRect(0, 0, w, h);
+  const frac = (db) => clamp((db - METER_DB_MIN) / (METER_DB_MAX - METER_DB_MIN), 0, 1);
+  const row = Math.floor((h - dpr) / 2);
+  for (let ch = 0; ch < 2; ch++) {
+    const y = ch * (row + dpr);
+    ctx.fillStyle = "rgba(255,255,255,.07)";
+    ctx.fillRect(0, y, w, row);
+    const lit = frac(vals[ch]) * w;
+    for (const [from, to, col] of [[0, 0.6, "#3dd68c"], [0.6, 0.85, "#f0c14a"], [0.85, 1, "#e5484d"]]) {
+      const a = from * w, b = Math.min(lit, to * w);
+      if (b > a) { ctx.fillStyle = col; ctx.fillRect(a, y, b - a, row); }
+    }
+    const hold = frac(vals[2 + ch]) * w;
+    if (hold > 1) { ctx.fillStyle = "#fff"; ctx.fillRect(Math.min(w - 2 * dpr, hold), y, 2 * dpr, row); }
+  }
+  const v = $("slimMeterVal");
+  if (v) {
+    const top = Math.max(vals[0], vals[1]);
+    v.textContent = meterState.mode.toUpperCase() + " " + (top <= METER_DB_MIN + 0.5 ? "–∞" : Math.round(top));
+  }
+}
+$("slimMeter")?.addEventListener("click", () => { cycleMeterMode(); slimLast = ""; paintSlimMeter(); });
 
 function play() {
   if (state.audioHold) setAudioHold(false);
@@ -16783,7 +16856,8 @@ function syncExportProfileVisibility() {
   const show = els.engineFast.checked && !els.engineFast.disabled;
   els.exportProfileRow?.classList.toggle("hidden", !show);
   // the batch list and the queue are Fast export (ffmpeg) only
-  for (const id of ["dlvBatch", "btnQueueExport", "btnBatchExport"]) $(id)?.classList.toggle("hidden", !show);
+  for (const id of ["dlvBatch", "btnQueueExport"]) $(id)?.classList.toggle("hidden", !show);
+  $("btnBatchExport")?.classList.toggle("hidden", !show || !projectOutputs().length);   // only with batch outputs (23 Nov)
   if (!show) { const w = $("dlvWarn"); if (w) w.classList.add("hidden"); xsRender(); }
   else if (selectedExportChoice().kind === "delivery") refreshDeliveryNotes();
   else xsRender();
@@ -17812,11 +17886,12 @@ function fastRenderChoice() {
 function fmtSlowed(s) { return s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`; }
 /** Hand the cuts to Create Summat: it renders them on its Queue, into this editor's exports folder. */
 function sendFastExport(choice) {
-  const fps = projectFps(), box = $("sendRtp");
+  const fps = projectFps(), copy = (pendingDownload && pendingDownload.folder) || "";
+  pendingDownload = null;
   hostWindow().postMessage({ source: "fablecut", type: "fast-export", project: project.name || "",
     pieces: choice.plan.pieces.map((p) => ({ file: p.file, in: p.in, out: p.out, speed: p.speed || 1, sound: p.sound || "normal" })),
     fps, height: choice.q, smooth: !!choice.smooth,
-    name: deliveryFileName(dlvSpec, fps), send: !!(box && box.checked) }, "*");
+    name: deliveryFileName(dlvSpec, fps), send: true, copy_to: copy }, "*");
   toast(`Create Summat is rendering this the fast way (about ${choice.minutes} min): watch the bar at the top of the window, or its Queue page`);
 }
 /** Seconds one frame took on this PC at each quality, learned from finished exports (setting "exportPace"). */
@@ -17884,7 +17959,7 @@ function exportStatus(frac) {
   if (!el || !exportClock) return;
   const dt = (performance.now() - exportClock.t0) / 1000;
   const left = frac >= 0.005 && dt >= 4 ? exportTimeLeft(dt * (1 - frac) / frac) : "working out the time left…";
-  const rtp = $("sendRtp") && $("sendRtp").checked && inCreateSummat() ? ", then to Ready to post" : "";
+  const rtp = inCreateSummat() ? `, then to Ready to post${pendingDownload ? ` and a copy to ${pendingDownload.folder}` : ""}` : "";
   el.textContent = left + (exportClock.where ? ` · the file goes to ${exportClock.where}${rtp}` : "");
   exportTell("running", frac, { stage: "drawn frame by frame in the Editor" });
 }
@@ -17914,20 +17989,67 @@ function exportTell(state, frac, extra) {
    file is not ALSO pushed at the Downloads folder. Outside Create Summat there is no box and nothing changes. */
 const hostWindow = () => { try { return window.__fablecutHost || (window.parent !== window ? window.parent : null); } catch { return null; } };
 const inCreateSummat = () => !!hostWindow();
+/* 23 Nov (Steve): "Export window buttons: Cancel / Add to queue / Download / Export to Ready to post (main button).
+   Remove the 'Send to Ready to post' tick box: every export goes to Library + Ready to post anyway. Download does the
+   same AND saves a copy to a folder I choose (remember the last folder). Say under the buttons where the file will
+   go in plain words." Inside Create Summat every export is handed to it; Download also names a folder for a copy. */
+let pendingDownload = null;          // {folder} while an export started by Download runs
+let editorExportsFolder = "";        // where the exports go, as Create Summat says
+let hostAskN = 0;
+/** Ask Create Summat (the window around this editor) something; resolves with its answer, or null. */
+function askHost(type, extra = {}, timeoutMs = 600000) {
+  return new Promise((resolve) => {
+    const host = hostWindow();
+    if (!host) { resolve(null); return; }
+    const id = "a" + (++hostAskN) + "_" + Date.now().toString(36);
+    const on = (ev) => {
+      const d = ev.data;
+      if (!d || d.source !== "createsummat" || d.id !== id) return;
+      if (ev.source !== host && !window.__fablecutHost) return;
+      window.removeEventListener("message", on); clearTimeout(timer); resolve(d);
+    };
+    const timer = setTimeout(() => { window.removeEventListener("message", on); resolve(null); }, timeoutMs);
+    window.addEventListener("message", on);
+    try { host.postMessage({ source: "fablecut", type, id, ...extra }, "*"); } catch { window.removeEventListener("message", on); clearTimeout(timer); resolve(null); }
+  });
+}
 function initSendToReadyToPost() {
-  const row = $("sendRtpRow"), box = $("sendRtp");
-  if (!row || !box || !inCreateSummat()) return;
-  row.classList.remove("hidden");
-  box.checked = getSetting("sendToReadyToPost") !== false;
-  box.addEventListener("change", () => setSetting("sendToReadyToPost", box.checked));
+  const cs = inCreateSummat();
+  if ($("btnStartExport")) $("btnStartExport").textContent = cs ? "Export to Ready to post" : "Export";
+  $("btnDownloadExport")?.classList.toggle("hidden", !cs);
+  updateExportWhere();
+}
+/** The line under the buttons: where the file will go, in plain words. */
+function updateExportWhere() {
+  const el = $("xsWhere");
+  if (!el) return;
+  if (!inCreateSummat()) { el.textContent = "Export: the video is saved in the editor's exports folder and your browser downloads it."; return; }
+  const ex = editorExportsFolder || "the Editor's exports folder", last = getSetting("downloadFolder");
+  el.innerHTML = `<b>Export to Ready to post:</b> the video is saved in ${escapeHtml(ex)}, it shows in Create Summat's Library, and it gets a Ready to post page (titles, description, chapters, tags, thumbnail).<br>`
+    + `<b>Download:</b> all of that, plus a copy in ${last ? escapeHtml(last) : "a folder you choose"} (you can pick the folder when you click it).<br>`
+    + `<b>Add to queue:</b> waits on the export queue until you press Start there.`;
+  if (!editorExportsFolder) askHost("where", {}, 5000).then((r) => { if (r && r.exports) { editorExportsFolder = r.exports; updateExportWhere(); } });
+}
+async function downloadExport() {
+  if (!inCreateSummat()) { pendingDownload = null; startChosenExport(); return; }
+  const btn = $("btnDownloadExport");
+  if (btn) btn.disabled = true;
+  const r = await askHost("choose-folder", { start: getSetting("downloadFolder") || "" });
+  if (btn) btn.disabled = false;
+  if (!r || !r.path) { toast("No folder chosen, so nothing was exported"); return; }
+  setSetting("downloadFolder", r.path);
+  pendingDownload = { folder: r.path };
+  updateExportWhere();
+  startChosenExport();
 }
 function sendToReadyToPost(src) {
   try {
-    const box = $("sendRtp");
-    if (!src || !inCreateSummat() || !box || !box.checked) return false;
+    if (!src || !inCreateSummat()) return false;
+    const copy = pendingDownload && pendingDownload.folder;
+    pendingDownload = null;
     hostWindow().postMessage({ source: "fablecut", type: "exported", project: project.name || "",
-      file: decodeURIComponent(String(src).split("/").pop()) }, "*");
-    toast("Sent to Ready to post: Create Summat is writing its page");
+      file: decodeURIComponent(String(src).split("/").pop()), copy_to: copy || "" }, "*");
+    toast(`Sent to Ready to post: Create Summat is writing its page${copy ? ` and saving a copy in ${copy}` : ""}`);
     return true;
   } catch { return false; }
 }
@@ -18302,7 +18424,7 @@ function renderQueue() {
     ? "Exporting — outputs with the same frame rate and range share one render."
     : exportQueue.length ? `${pending} waiting · ${done} done` : "Nothing queued — pick settings in Export and press Add to queue.";
   const btnOpen = $("btnOpenQueue");
-  if (btnOpen) btnOpen.textContent = exportQueue.length ? `Queue · ${pending || exportQueue.length}` : "Queue";
+  if (btnOpen) { btnOpen.textContent = exportQueue.length ? `Queue · ${pending || exportQueue.length}` : "Queue"; btnOpen.classList.toggle("hidden", !exportQueue.length); }
   const start = $("btnQueueStart");
   start.textContent = queueRunning ? "Stop" : "Start";
   start.disabled = !queueRunning && !pending;
@@ -18411,7 +18533,8 @@ function renderBatchList() {
   const on = list.filter((o) => o.on !== false).length;
   $("dlvBatchCount").textContent = list.length ? `· ${on} of ${list.length} checked` : "";
   const be = $("btnBatchExport");
-  if (be) { be.disabled = !on; be.textContent = on ? `Export checked (${on})` : "Export checked"; }
+  if (be) { be.disabled = !on; be.textContent = on ? `Export checked (${on})` : "Export checked";
+    be.classList.toggle("hidden", !list.length || !(els.engineFast.checked && !els.engineFast.disabled)); }
   if (!list.length) { ul.innerHTML = `<li class="bo-empty">No batch outputs yet — add the settings above, or a typical set</li>`; return; }
   ul.innerHTML = list.map((o) => {
     const sp = normalizeDelivery(o).spec, fr = deliveryFrame(sp), fps = sp.fps || projectFps();
@@ -19031,7 +19154,9 @@ $("btnRippleDelete").addEventListener("click", () => {
   if (!clearFocusedTransition()) rippleDeleteSelected();
 });
 $("btnExport").addEventListener("click", openExportSetup);
-$("btnStartExport").addEventListener("click", startChosenExport);
+$("btnStartExport").addEventListener("click", () => { pendingDownload = null; startChosenExport(); });
+$("btnDownloadExport")?.addEventListener("click", downloadExport);
+$("btnExport").addEventListener("click", updateExportWhere);
 initSendToReadyToPost();
 $("forceFrames")?.addEventListener("change", () => { setSetting("forceFrames", $("forceFrames").checked); xsRender(); });
 if ($("forceFrames")) $("forceFrames").checked = getSetting("forceFrames") === true;
@@ -19134,6 +19259,15 @@ $("btnCancelExport").addEventListener("click", () => {
 });
 $("btnPlay").addEventListener("click", toggleTransportPlay);
 els.btnSpeed.addEventListener("click", () => cyclePreviewRate(1));
+/* Undo / Redo arrows at the top (23 Nov): the same steps as Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z; greyed when there is none. */
+$("btnUndo")?.addEventListener("click", () => { if (document.activeElement?.blur) document.activeElement.blur(); undo(); syncUndoButtons(); });
+$("btnRedo")?.addEventListener("click", () => { if (document.activeElement?.blur) document.activeElement.blur(); redo(); syncUndoButtons(); });
+function syncUndoButtons() {
+  const u = $("btnUndo"), r = $("btnRedo");
+  if (u) { const off = !runtime.undo.length; if (u.disabled !== off) u.disabled = off; }
+  if (r) { const off = !runtime.redo.length; if (r.disabled !== off) r.disabled = off; }
+}
+setInterval(syncUndoButtons, 250);
 $("xsSmooth")?.addEventListener("change", () => { try { xsRender(); } catch {} });
 $("btnHome").addEventListener("click", gotoTransportHome);
 $("btnEnd").addEventListener("click", gotoTransportEnd);
@@ -19752,6 +19886,14 @@ window.addEventListener("keydown", (e) => {
   if (k === "Escape" && els.importUrlOverlay && !els.importUrlOverlay.classList.contains("hidden")) {
     e.preventDefault();
     closeImportUrl();
+    return;
+  }
+  // a drop-down menu (the sound menu, a blend mode...) keeps focus after a choice: undo / redo still work there
+  // (23 Nov); text boxes keep the browser's own undo of the typing
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && document.activeElement?.tagName === "SELECT" && /^[zy]$/i.test(k)) {
+    e.preventDefault();
+    document.activeElement.blur();
+    if (k.toLowerCase() === "y" || e.shiftKey) redo(); else undo();
     return;
   }
   if (isTypingTarget(document.activeElement)) return;
