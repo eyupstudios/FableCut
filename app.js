@@ -1490,6 +1490,7 @@ function applyProject(data, opts = {}) {
     collections: MediaLib.normalizeCollections(data.collections, data.media || []),
     clips: data.clips || [],
     markers: normalizeMarkers(data.markers),
+    shortBoxes: typeof ShortBoxes !== "undefined" ? ShortBoxes.normalize(data.shortBoxes) : (Array.isArray(data.shortBoxes) ? data.shortBoxes : []),
     inPoint: wa.inPoint,
     outPoint: wa.outPoint,
     exportFrame: normalizeExportFrame(data.exportFrame, data.width || 1280, data.height || 720),
@@ -1652,6 +1653,7 @@ function projectJSONHere() {
     }),
     clips: clips.map(serializeClip),
     markers: normalizeMarkers(markers),
+    ...(project.shortBoxes && project.shortBoxes.length ? { shortBoxes: project.shortBoxes } : {}),
     inPoint: inPoint == null ? null : inPoint,
     outPoint: outPoint == null ? null : outPoint,
     disabledTracks: normalizeDisabledTracks(disabledTracks),
@@ -5233,6 +5235,7 @@ function rebuildClips() {
   paintAudioOverlaps();
   paintSilences();
   paintBeats();
+  if (typeof paintShortBoxes === "function") paintShortBoxes();   // Short boxes (short-boxes.js, 23 Nov)
   state.dirtyTimeline = false;
   updateWorkArea();
 }
@@ -19149,6 +19152,7 @@ els.btnSnap.addEventListener("click", () => {
 });
 els.btnSnapMenu.addEventListener("click", () => openSnapMenu(els.btnSnap));
 els.btnMarkers.addEventListener("click", () => openMarkerList(els.btnMarkers));
+if ($("btnAddShort")) $("btnAddShort").addEventListener("click", () => addShortBox());   // Short boxes (23 Nov)
 if (els.btnAudioHold) {
   els.btnAudioHold.addEventListener("click", () => setAudioHold(!state.audioHold));
 }
