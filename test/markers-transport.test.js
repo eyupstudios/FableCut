@@ -30,14 +30,15 @@ const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-9, `${msg}: expected 
 
 /* ── Timecode ─────────────────────────────────────────────────────────── */
 
-test("colon timecode reads right to left as frames, seconds, minutes, hours", () => {
+test("colon timecode reads as times are shown: m:ss, h:mm:ss, h:mm:ss:ff (23 Nov)", () => {
   const p = (s) => lib.parseTimecode(s, 30);
-  near(p("00:01:15"), 1.5, "mm:ss:ff");
-  near(p("01:02:03"), 62.1, "mm:ss:ff");
-  near(p("1:00:00:00"), 3600, "hh:mm:ss:ff");
-  near(p("2:15"), 2.5, "ss:ff");
-  near(p("0:45"), 1.5, "frames may overflow");
-  near(p("01;02;03"), 62.1, "semicolons (drop-frame notation) read like colons");
+  near(p("0:07:25"), 445, "h:mm:ss (Steve's example)");
+  near(p("01:02:03"), 3723, "h:mm:ss");
+  near(p("1:00:00:00"), 3600, "h:mm:ss:ff");
+  near(p("0:00:01:15"), 1.5, "h:mm:ss:ff");
+  near(p("2:15"), 135, "m:ss");
+  near(p("0:00:00:45"), 1.5, "frames may overflow");
+  near(p("01;02;03"), 3723, "semicolons (drop-frame notation) read like colons");
 });
 
 test("bare digits pack Premiere-style from the right", () => {
@@ -56,7 +57,8 @@ test("a decimal point or trailing s means seconds", () => {
 
 test("+ and - offset from the base time and never go below zero", () => {
   near(lib.parseTimecode("+30", 30, 10), 11, "+30 frames");
-  near(lib.parseTimecode("-1:00", 30, 10), 9, "-1 s");
+  near(lib.parseTimecode("-0:01", 30, 10), 9, "-1 s");
+  near(lib.parseTimecode("+1:00", 30, 10), 70, "+1 min");
   near(lib.parseTimecode("+2.5", 30, 1), 3.5, "+2.5 s");
   near(lib.parseTimecode("-100", 30, 0.5), 0, "clamped at 0");
 });

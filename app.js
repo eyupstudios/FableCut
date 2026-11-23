@@ -86,7 +86,7 @@ const ANIMATABLE = ["x", "y", "scale", "rotation", "opacity", "volume", "pan", "
   "fontSize", "letterSpacing", "glow", "anchorX", "anchorY", "trimStart", "trimEnd", "trimOffset", "pathOffset"];
 const TRANSITIONS = ["none", "fade", "slide-left", "slide-right", "slide-up", "slide-down",
   "zoom", "wipe", "wipe-right", "wipe-up", "wipe-down", "iris", "spin", "blur", "whip",
-  "glitch", "pop"];
+  "glitch", "pop", "dip-black", "dip-white", "cross"];
 const TEXT_ANIMS = ["none", "typewriter", "word-pop", "word-slide", "karaoke", "highlight",
   "letter-pop", "wave", "bounce", "shake",
   "clip-reveal", "zoom-in", "font-cut", "rise-mask"];
@@ -832,17 +832,21 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
-function fmt(t) {
-  t = Math.max(0, t);
-  const m = Math.floor(t / 60), s = Math.floor(t % 60),
-    f = Math.floor((t % 1) * projectFps());
+/* Times on screen (Steve, 23 Nov 2026): "Time display as h:mm:ss (e.g. 0:07:25); frames only when zoomed in."
+   Frames (h:mm:ss:ff) once the timeline is zoomed in far enough to place single frames (FRAMES_PPS). */
+const FRAMES_PPS = 150;
+function framesShown() { return typeof state !== "undefined" && state && state.pps >= FRAMES_PPS; }
+function fmt(t, frames = framesShown()) {
+  t = Math.max(0, +t || 0);
+  const fps = projectFps(), whole = Math.floor(t + 1e-9);
+  const h = Math.floor(whole / 3600), m = Math.floor((whole % 3600) / 60), s = whole % 60,
+    f = Math.min(Math.ceil(fps) - 1, Math.floor((t - whole) * fps + 1e-6));
   const p = (n) => String(n).padStart(2, "0");
-  return `${p(m)}:${p(s)}:${p(f)}`;
+  return `${h}:${p(m)}:${p(s)}` + (frames ? `:${p(f)}` : "");
 }
-/* Typed timecode → seconds, or null if it doesn't parse. Colon (or ;)
-   fields read right-to-left as FF, SS, MM, HH; bare digits pack the same way
-   (Premiere style: "1500" = 15s 00f, "5" = 5 frames). Frames may overflow
-   ("0:45" at 30 fps = 1.5 s). A decimal point or trailing "s" means seconds
+/* Typed timecode → seconds, or null if it doesn't parse. Colon (or ;) fields read as times are shown (23 Nov):
+   "7:25" = m:ss, "0:07:25" = h:mm:ss, "0:07:25:12" = h:mm:ss:ff. Bare digits pack Premiere style from the right
+   as FF, SS, MM, HH ("1500" = 15s 00f, "5" = 5 frames). A decimal point or trailing "s" means seconds
    ("12.5", "90s").
    A leading + / − offsets from `base` instead of setting an absolute time. */
 function parseTimecode(str, fps, base = 0) {
@@ -860,8 +864,10 @@ function parseTimecode(str, fps, base = 0) {
       fields = [];
       for (let i = s.length; i > 0; i -= 2) fields.unshift(s.slice(Math.max(0, i - 2), i));
       if (fields.length > 4) fields = [fields.slice(0, fields.length - 3).join(""), ...fields.slice(-3)];
-    } else if (/^\d*([:;]\d*){1,3}$/.test(s)) fields = s.split(/[:;]/);
-    else return null;
+    } else if (/^\d*([:;]\d*){1,3}$/.test(s)) {
+      const f = s.split(/[:;]/);                  // m:ss · h:mm:ss · h:mm:ss:ff -> [hh, mm, ss, ff]
+      fields = f.length === 2 ? ["0", f[0], f[1], "0"] : f.length === 3 ? [...f, "0"] : f;
+    } else return null;
     const n = fields.map((f) => +f || 0).reverse(); // [ff, ss, mm, hh]
     sec = (n[3] || 0) * 3600 + (n[2] || 0) * 60 + (n[1] || 0) + (n[0] || 0) / (fps > 0 ? fps : 30);
   }
@@ -5325,6 +5331,7 @@ function rebuildClips() {
     let inner = `<div class="clip-body">${body}</div>`;
     inner += transitionMarksHtml(c, tr.h);
     if (c.kind === "audio") inner += volBandHtml(c, tr.h) + fadeGripsHtml(c);
+    else if (c.kind === "video") inner += fadeGripsHtml(c);          // 23 Nov: Fade in / out on the picture too
     inner += `<div class="handle l"></div><div class="handle r"></div>`;
     div.innerHTML = inner;
     if (hasWave) div.classList.add("has-wave");
@@ -5332,6 +5339,7 @@ function rebuildClips() {
     if (hasWave) drawClipWave(div.querySelector(".wave"), c, tr.h);
   }
   paintAudioOverlaps();
+  paintJoins();                                                     // the Transition buttons on joins (23 Nov)
   paintSilences();
   paintBeats();
   if (typeof paintShortBoxes === "function") paintShortBoxes();   // Short boxes (short-boxes.js, 23 Nov)
@@ -5436,7 +5444,8 @@ function paintAudioOverlaps() {
 function isCrossfaded(x, y) {
   const [a, b] = x.start <= y.start ? [x, y] : [y, x];
   const ov = Math.min(clipEnd(a), clipEnd(b)) - b.start - 1e-3;
-  return a.transitionOut?.type === "fade" && b.transitionIn?.type === "fade" &&
+  const xf = (tr) => tr?.type === "fade" || tr?.type === "cross";
+  return xf(a.transitionOut) && xf(b.transitionIn) &&
     a.transitionOut.duration >= ov && b.transitionIn.duration >= ov;
 }
 
@@ -5514,11 +5523,113 @@ function volBandHtml(c, trackH) {
   }
   return html;
 }
+/* ── Fades and transitions (Steve, 23 Nov 2026; the rules are in fades.js) ──
+   A button on every join between two clips opens the Transition menu (None / Dip to black / Cross fade / Dip to
+   white, a length); the corner grips of a video clip drag its Fade in / Fade out (picture and sound together); the
+   Inspector has Fade in / Fade out. The fast renderer makes them all (ffmpeg fade / xfade, the sound faded too). */
+const FADES = typeof FableCutFades !== "undefined" ? FableCutFades : null;
+const JOIN_TIPS = {
+  none: "A plain cut: the next clip starts straight away",
+  "dip-black": "The picture fades out to black, then the next clip fades in from black. The sound fades out and back in with it",
+  cross: "The two clips blend into each other: the next one fades in over the end of this one, and their sounds cross over",
+  "dip-white": "The picture fades out to white, then the next clip fades in from white. The sound fades out and back in with it",
+};
+const fadeHelpers = () => ({
+  withLinked, clipSpeed, crossfadeCut: (a, b, d) => crossfadeCut(a, b, d),
+  trimHead: (x, s) => {             // start the clip s seconds later, keeping the rest of it where it is
+    const sp = clipSpeed(x);
+    x.start = +(x.start + s).toFixed(4); x.in = +(x.in + s * sp).toFixed(4); x.duration = +(x.duration - s).toFixed(4);
+    x.keyframes = shiftKF(x.keyframes, s, x.duration);
+  },
+});
+/** The clips a fade on c applies to: a picture and its sound, or a sound on its own. */
+const fadeGroup = (c) => withLinked([c]).filter((x) => x.kind === "video" || x.kind === "audio");
+const isStem = (c) => c.kind === "audio" && withLinked([c]).some((x) => x.kind === "video");
+/** A small button on each join between two clips of one track (a picture's sound follows its picture). */
+function paintJoins() {
+  if (!FADES) return;
+  const tol = 1.5 / (project.fps || 30);
+  const lanes = new Map();
+  for (const c of project.clips) {
+    if (!(c.kind === "video" || (c.kind === "audio" && !isStem(c)))) continue;
+    if (!lanes.has(c.track)) lanes.set(c.track, []);
+    lanes.get(c.track).push(c);
+  }
+  for (const [trackId, clips] of lanes) {
+    if (clips.length < 2) continue;
+    const row = els.tracks.querySelector(`[data-track="${trackId}"]`);
+    if (!row) continue;
+    clips.sort((x, y) => x.start - y.start);
+    for (let i = 0; i + 1 < clips.length; i++) {
+      const a = clips[i], b = clips[i + 1];
+      if (b.start > clipEnd(a) + tol || b.start <= a.start + tol) continue;
+      const j = FADES.joinOf(a, b), name = (FADES.JOINS.find((x) => x[0] === j.type) || [])[1] || "None";
+      const el = document.createElement("div");
+      el.className = "join-btn" + (j.type !== "none" ? " set " + j.type : "");
+      el.dataset.a = a.id; el.dataset.b = b.id;
+      el.style.left = (((b.start + clipEnd(a)) / 2) * state.pps).toFixed(1) + "px";
+      el.textContent = j.type === "none" ? "+" : j.type === "cross" ? "✕" : "◆";
+      el.dataset.tip = j.type === "none" ? "Transition: click to add a fade between these two clips (Dip to black, Cross fade or Dip to white)"
+        : `Transition: ${name}, ${j.length} s. Click to change it or take it off`;
+      row.appendChild(el);
+    }
+  }
+}
+function showJoinMenu(anchor, a, b) {
+  if (!FADES || !a || !b) return;
+  hideTrackCtxMenu();
+  const cur = FADES.joinOf(a, b);
+  const menu = document.createElement("div");
+  menu.className = "ctx-menu join-menu";
+  menu.id = "trackCtxMenu";
+  menu.innerHTML = `<div class="join-menu-title">Transition</div>` +
+    FADES.JOINS.map(([v, l]) => `<label class="join-opt" data-tip="${escapeHtml(JOIN_TIPS[v])}"><input type="radio" name="joinType" value="${v}" ${v === cur.type ? "checked" : ""}> ${l}</label>`).join("") +
+    `<label class="join-len" data-tip="How long the whole transition takes, in seconds (a dip is half out, half in)">Length
+      <input type="number" data-join-len min="0.1" max="10" step="0.1" value="${cur.type === "none" ? FADES.DEFAULT_LENGTH : cur.length}"> s</label>
+     <div class="join-btns"><button type="button" class="btn tiny" data-join-apply data-tip="Put this transition on the join">Apply</button></div>`;
+  document.body.appendChild(menu);
+  trackCtxMenu = menu;
+  const r = anchor.getBoundingClientRect(), pad = 6;
+  let x = r.left - menu.offsetWidth / 2, y = r.bottom + 4;
+  if (y + menu.offsetHeight + pad > window.innerHeight) y = r.top - menu.offsetHeight - 4;
+  menu.style.left = clamp(x, pad, window.innerWidth - menu.offsetWidth - pad) + "px";
+  menu.style.top = Math.max(pad, y) + "px";
+  const apply = () => {
+    const type = menu.querySelector("input[name=joinType]:checked")?.value || "none";
+    const len = parseFloat(menu.querySelector("[data-join-len]").value) || FADES.DEFAULT_LENGTH;
+    hideTrackCtxMenu();
+    applyJoin(a, b, type, len);
+  };
+  menu.querySelector("[data-join-apply]").addEventListener("click", apply);
+  menu.querySelector("[data-join-len]").addEventListener("keydown", (e) => { if (e.key === "Enter") apply(); });
+  menu.querySelectorAll("input[name=joinType]").forEach((r) => r.addEventListener("change", apply));
+}
+function applyJoin(a, b, type, len) {
+  if (isGroupLocked(a) || isGroupLocked(b)) { toastLocked(); return; }
+  const touched = [...withLinked([a]), ...withLinked([b])];
+  const saved = touched.map((x) => [x, JSON.parse(JSON.stringify(x))]);
+  pushUndo();
+  const why = FADES.setJoin(a, b, type, len, fadeHelpers());
+  if (why) {                                   // put everything back as it was
+    for (const [x, s] of saved) { for (const k of Object.keys(x)) if (!(k in s)) delete x[k]; Object.assign(x, s); }
+    runtime.undo.pop();
+    toast(`No cross fade here: ${why}. Try a shorter length or a dip.`);
+  } else {
+    const name = (FADES.JOINS.find((x) => x[0] === type) || [])[1];
+    toast(type === "none" ? "Transition taken off" : `${name}, ${FADES.joinOf(a, b).length} s`);
+  }
+  state.dirtyTimeline = true;
+  scheduleSave();
+  renderInspector();
+}
 function fadeGripsHtml(c) {
-  const fin = c.transitionIn?.type === "fade" ? clipTransitionDur(c.transitionIn) : 0;
-  const fout = c.transitionOut?.type === "fade" ? clipTransitionDur(c.transitionOut) : 0;
-  return `<div class="fade-grip l" style="left:${(Math.min(fin, c.duration) * state.pps).toFixed(1)}px" title="Drag to fade in"></div>` +
-    `<div class="fade-grip r" style="right:${(Math.min(fout, c.duration) * state.pps).toFixed(1)}px" title="Drag to fade out"></div>`;
+  const dips = FADES ? FADES.DIPS : [];
+  const pic = c.kind === "video" || isStem(c);       // a picture and its sound fade together, as Fade in / out
+  const on = (tr) => tr && (pic ? dips.includes(tr.type) : tr.type === "fade" || dips.includes(tr.type));
+  const fin = on(c.transitionIn) ? clipTransitionDur(c.transitionIn) : 0;
+  const fout = on(c.transitionOut) ? clipTransitionDur(c.transitionOut) : 0;
+  return `<div class="fade-grip l" style="left:${(Math.min(fin, c.duration) * state.pps).toFixed(1)}px" data-tip="Fade in: drag right to fade ${pic ? "the picture and sound in from black" : "the sound in"}${fin ? ` (now ${fin.toFixed(2)} s)` : ""}"></div>` +
+    `<div class="fade-grip r" style="right:${(Math.min(fout, c.duration) * state.pps).toFixed(1)}px" data-tip="Fade out: drag left to fade ${pic ? "the picture and sound out to black" : "the sound out"}${fout ? ` (now ${fout.toFixed(2)} s)` : ""}"></div>`;
 }
 const volGroup = (c) => withLinked([c]).filter((x) => x.kind === "audio");
 /** Copy c's volume (static + keyframes) onto its linked stems. */
@@ -5647,6 +5758,34 @@ function startFadeGripGesture(e, c, side) {
   if (isGroupLocked(c)) { toastLocked(); return; }
   selectClip(c.id, { transFocus: side });
   const key = side === "in" ? "transitionIn" : "transitionOut";
+  if (FADES && (c.kind === "video" || isStem(c))) {   // a picture's grips: Fade in / out on the picture and its sound
+    const group = fadeGroup(c), cur = FADES.fadeOf(c, side);
+    const x0 = e.clientX;
+    let moved = false;
+    state.gesture = true;
+    pushUndo();
+    const onMove = (ev) => {
+      const dx = ev.clientX - x0;
+      if (!moved && Math.abs(dx) < 2) return;
+      moved = true;
+      const dur = clamp(cur.seconds + (side === "in" ? dx : -dx) / state.pps, 0, c.duration);
+      FADES.setFade(group, side, dur < FADES.MIN ? 0 : dur, cur.color);
+      showTrimReadout(ev, dur < FADES.MIN ? "no fade" : `fade ${side} ${dur.toFixed(2)} s`);
+      state.dirtyTimeline = true;
+      rebuildClips();
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      hideTrimReadout();
+      state.gesture = false;
+      if (moved) scheduleSave(); else runtime.undo.pop();
+      renderInspector();
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return;
+  }
   const group = volGroup(c);
   const orig = c[key]?.type === "fade" ? clipTransitionDur(c[key]) : 0;
   const x0 = e.clientX;
@@ -5757,7 +5896,7 @@ function drawRulerMainThread(w, h, dpr) {
     const x = Math.round(t * pps - sl) + 0.5;
     const isMajor = i % 5 === 0;
     g.moveTo(x, isMajor ? 8 : 17); g.lineTo(x, h);
-    if (isMajor) g.fillText(fmt(Math.round(t * 1000) / 1000).slice(0, 5), x + 4, 12);
+    if (isMajor) g.fillText(fmt(Math.round(t * 1000) / 1000, step < 1), x + 4, 12);
   }
   g.stroke();
   // dim timeline outside the IN–OUT work area
@@ -6052,6 +6191,12 @@ els.tracksContent.addEventListener("pointerdown", (e) => {
   // Clicking the timeline should release inspector text fields so shortcuts (z, s, …) work
   if (isTypingTarget(document.activeElement) && els.inspector.contains(document.activeElement))
     document.activeElement.blur();
+  const joinBtn = e.target.closest(".join-btn");
+  if (joinBtn) {                              // the Transition menu for that join
+    e.preventDefault(); e.stopPropagation();
+    showJoinMenu(joinBtn, getClip(joinBtn.dataset.a), getClip(joinBtn.dataset.b));
+    return;
+  }
   const clipDiv = e.target.closest(".clip");
   if (!clipDiv) {
     // empty track background: drag = marquee select, plain click = seek + deselect
@@ -6060,6 +6205,10 @@ els.tracksContent.addEventListener("pointerdown", (e) => {
   }
   const c = getClip(clipDiv.dataset.id);
   if (!c) return;
+  if (c.kind === "video" && (state.tool || "select") === "select") {
+    const grip = e.target.closest(".fade-grip");
+    if (grip) { startFadeGripGesture(e, c, grip.classList.contains("r") ? "out" : "in"); return; }
+  }
   if (c.kind === "audio" && (state.tool || "select") === "select") {
     const grip = e.target.closest(".fade-grip");
     if (grip) { startFadeGripGesture(e, c, grip.classList.contains("r") ? "out" : "in"); return; }
@@ -7175,6 +7324,19 @@ function renderInspector(lite) {
   if (isVisualClip(c)) html += motionSectionHtml(c, p, row);
   if (c.kind !== "audio" && c.kind !== "null") html += maskSectionHtml(c);
   if (c.kind === "video") html += trackSectionHtml(c);
+  if (FADES && (c.kind === "video" || c.kind === "audio")) {       // 23 Nov: Fade in / Fade out, picture and sound together
+    const pic = c.kind === "video" || isStem(c);
+    const fadeRow = (side, label) => {
+      const f = FADES.fadeOf(c, side);
+      return row(label, `<span class="insp-ctrls"><input type="number" data-fade="${side}" min="0" max="30" step="0.1" value="${f.seconds}" style="max-width:64px"
+        data-tip="${label}: how many seconds the ${pic ? "picture and sound" : "sound"} take to fade ${side === "in" ? "in" : "out"} (0 = no fade)"> s
+        ${pic ? `<select data-fade-color="${side}" style="width:auto" data-tip="Fade ${side === "in" ? "in from" : "out to"} black or white">
+          <option value="black" ${f.color === "black" ? "selected" : ""}>${side === "in" ? "from" : "to"} black</option>
+          <option value="white" ${f.color === "white" ? "selected" : ""}>${side === "in" ? "from" : "to"} white</option></select>` : ""}</span>`);
+    };
+    html += `<div class="insp-section"><h3>Fades</h3>${fadeRow("in", "Fade in")}${fadeRow("out", "Fade out")}
+      <div class="insp-note">Between two clips, click the button on the join for a Dip to black, Cross fade or Dip to white.</div></div>`;
+  }
   html += `<div class="insp-section"><h3>Transition</h3>
     ${tsel("In", "transIn", c.transitionIn)}
     ${curveSel("In curve", "curveIn", c.transitionIn)}
@@ -7241,6 +7403,19 @@ function renderInspector(lite) {
   }
   els.inspector.innerHTML = html;
   inspSyncStamp = inspStampNow(); // full rebuild already reflects this state
+  if (FADES) {                    // Fade in / Fade out: the clip and its picture / sound together, one undo step each change
+    const setFadeFromInspector = (side) => {
+      if (isGroupLocked(c)) { toastLocked(); renderInspector(); return; }
+      const secs = Math.max(0, parseFloat(els.inspector.querySelector(`[data-fade="${side}"]`)?.value) || 0);
+      const color = els.inspector.querySelector(`[data-fade-color="${side}"]`)?.value || "black";
+      pushUndo();
+      FADES.setFade(fadeGroup(c), side, secs, color);
+      state.dirtyTimeline = true;
+      scheduleSave();
+    };
+    els.inspector.querySelectorAll("[data-fade]").forEach((inp) => inp.addEventListener("change", () => setFadeFromInspector(inp.dataset.fade)));
+    els.inspector.querySelectorAll("[data-fade-color]").forEach((s) => s.addEventListener("change", () => setFadeFromInspector(s.dataset.fadeColor)));
+  }
   els.inspector.querySelectorAll("label.insp-reset[data-reset]").forEach((lab) => {
     lab.addEventListener("click", (e) => {
       const all = e.ctrlKey || e.metaKey;
@@ -11332,14 +11507,19 @@ function evalProps(c, t) {
   const tin = c.transitionIn, tout = c.transitionOut;
   if (tin && tin.duration > 0 && local < tin.duration) {
     const u = clamp(local / tin.duration, 0, 1);
-    applyTransition(p, tin.type, 1 - EASE["ease-out"](u), W, H, -1, audioFadeGain(tin.curve, u));
+    applyTransition(p, tin.type, STRAIGHT_FADES.has(tin.type) ? 1 - u : 1 - EASE["ease-out"](u), W, H, -1, audioFadeGain(tin.curve, u));
   }
   if (tout && tout.duration > 0 && local > c.duration - tout.duration) {
     const u = clamp((local - (c.duration - tout.duration)) / tout.duration, 0, 1);
-    applyTransition(p, tout.type, EASE["ease-in"](u), W, H, 1, audioFadeGain(tout.curve, 1 - u));
+    applyTransition(p, tout.type, STRAIGHT_FADES.has(tout.type) ? u : EASE["ease-in"](u), W, H, 1, audioFadeGain(tout.curve, 1 - u));
   }
   return p;
 }
+/* Fades and transitions (Steve, 23 Nov 2026): Dip to black / Dip to white (the picture fades to the colour, the
+   sound fades out and in with it) and Cross fade. They run in a straight line, exactly as ffmpeg's fade / xfade /
+   afade do, so the fast renderer's export matches the preview frame for frame. */
+const STRAIGHT_FADES = new Set(["dip-black", "dip-white", "cross"]);
+const DIP_COLOR = { "dip-black": "#000000", "dip-white": "#ffffff" };
 /* Audio fade shapes. `u` runs 0 (silent edge) → 1 (full level). A fade with
    no `curve` keeps the original eased shape (applyTransition's 1 − k), so
    older projects sound the same. Two "power" fades crossing sum to constant
@@ -11369,8 +11549,10 @@ function applyFilterPreset(p) {
 function applyTransition(p, type, k, W, H, dir, audioG = null) {
   if (!(k > 0)) return;
   switch (type) {
-    case "fade": case "dissolve":
+    case "fade": case "dissolve": case "cross":
       p.opacity *= 1 - k; p.volume *= audioG ?? 1 - k; break;
+    case "dip-black": case "dip-white":    // the picture goes to the colour (drawn over it), the sound fades
+      p._dip = Math.max(+p._dip || 0, k); p._dipColor = DIP_COLOR[type]; p.volume *= audioG ?? 1 - k; break;
     case "slide-left": p.x = (+p.x || 0) - dir * k * W; break;
     case "slide-right": p.x = (+p.x || 0) + dir * k * W; break;
     case "slide-up": p.y = (+p.y || 0) - dir * k * H; break;
@@ -13409,6 +13591,12 @@ function drawClipPicture(c, W, H, t, layered) {
       ctx2d.fillRect(-dw / 2, -dh / 2, dw, dh);
     }
     if (p.grain > 0) drawGrain(p.grain, -dw / 2, -dh / 2, dw, dh, t);
+    if (p._dip > 0) {                      // Dip to black / white: the colour over the picture, as ffmpeg's fade
+      ctx2d.globalAlpha = clamp(p.opacity, 0, 1) * clamp(p._dip, 0, 1);
+      ctx2d.globalCompositeOperation = "source-over";
+      ctx2d.fillStyle = p._dipColor || "#000000";
+      ctx2d.fillRect(-dw / 2, -dh / 2, dw, dh);
+    }
   }
   ctx2d.restore();
   return { p, geom };
@@ -17904,7 +18092,9 @@ function sendFastExport(choice) {
   const fps = projectFps(), copy = (pendingDownload && pendingDownload.folder) || "";
   pendingDownload = null;
   hostWindow().postMessage({ source: "fablecut", type: "fast-export", project: project.name || "",
-    pieces: choice.plan.pieces.map((p) => ({ file: p.file, in: p.in, out: p.out, speed: p.speed || 1, sound: p.sound || "normal" })),
+    pieces: choice.plan.pieces.map((p) => ({ file: p.file, in: p.in, out: p.out, speed: p.speed || 1, sound: p.sound || "normal",
+      fadeIn: p.fadeIn || 0, fadeInColor: p.fadeInColor || "black", fadeOut: p.fadeOut || 0, fadeOutColor: p.fadeOutColor || "black",
+      cross: p.cross || 0 })),
     fps, height: choice.q, smooth: !!choice.smooth,
     name: deliveryFileName(dlvSpec, fps), send: !copy, download: !!copy, copy_to: copy, thumb_at: thumbAtInExport(fps) }, "*");
   toast(copy ? `Create Summat is making this (about ${choice.minutes} min), then saving it in ${copy}. Keep editing.`

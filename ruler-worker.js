@@ -9,12 +9,15 @@
    available) if the look changes. */
 let cv = null, g = null;
 
-function fmt(t, fps) {
+/* h:mm:ss, and :ff only when zoomed in (ticks under a second apart) - as app.js's fmt (23 Nov 2026) */
+function fmt(t, fps, frames) {
   t = Math.max(0, t);
-  const m = Math.floor(t / 60), s = Math.floor(t % 60),
-    f = Math.floor((t % 1) * (fps > 0 ? fps : 1));
+  fps = fps > 0 ? fps : 1;
+  const whole = Math.floor(t + 1e-9);
+  const h = Math.floor(whole / 3600), m = Math.floor((whole % 3600) / 60), s = whole % 60,
+    f = Math.min(Math.ceil(fps) - 1, Math.floor((t - whole) * fps + 1e-6));
   const p = (n) => String(n).padStart(2, "0");
-  return `${p(m)}:${p(s)}:${p(f)}`;
+  return `${h}:${p(m)}:${p(s)}` + (frames ? `:${p(f)}` : "");
 }
 
 function draw(msg) {
@@ -38,7 +41,7 @@ function draw(msg) {
     const x = Math.round(t * pps - sl) + 0.5;
     const isMajor = i % 5 === 0;
     g.moveTo(x, isMajor ? 8 : 17); g.lineTo(x, h);
-    if (isMajor) g.fillText(fmt(Math.round(t * 1000) / 1000, fps).slice(0, 5), x + 4, 12);
+    if (isMajor) g.fillText(fmt(Math.round(t * 1000) / 1000, fps, step < 1), x + 4, 12);
   }
   g.stroke();
   // dim timeline outside the IN–OUT work area

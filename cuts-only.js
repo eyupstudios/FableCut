@@ -33,6 +33,13 @@
   const fileOf = (src) => { try { return decodeURIComponent(String(src || "").split(/[\\/]/).pop()); } catch { return String(src || "").split(/[\\/]/).pop(); } };
 
   const SPEED_MIN = 0.25, SPEED_MAX = 4, SOUNDS = ["normal", "deep", "mute"];
+  /* 23 Nov: fades and transitions the fast renderer makes itself (ffmpeg fade / xfade, the sound faded with it) -
+     Fade in / out and Dip to black / white (dip-*), Cross fade (cross). See fades.js. */
+  const FAST_FADES = ["dip-black", "dip-white", "cross"];
+  const near = (x, y, tol) => Math.abs(x - y) <= tol;
+  /** The transition a sound stem must have for its picture's: the same kind and length (equal-power for a cross). */
+  const sameFade = (s, want, tol) => (!s && !want) || (!!s && !!want && s.type === want.type && near(s.duration, want.duration, tol) &&
+    (want.type === "cross" ? s.curve === "power" : !s.curve || s.curve === "linear"));
   const speedOf = (c, d) => { const v = Number((c.props || {}).speed != null ? c.props.speed : d.speed); return v > 0 ? v : 1; };
   const soundOf = (c, d) => { const v = (c.props || {}).speedSound != null ? c.props.speedSound : d.speedSound; return SOUNDS.includes(v) ? v : "normal"; };
 
@@ -53,6 +60,7 @@
     const videos = [], sounds = [];
     for (const c of project.clips) {
       for (const k of Object.keys(c)) if (!CLIP_KEYS.has(k) && !empty(c[k])) {
+        if ((k === "transitionIn" || k === "transitionOut") && FAST_FADES.includes(c[k].type)) continue;   // checked below
         no(k === "keyframes" ? `a clip at ${clock(c.start)} is animated (keyframes)`
           : k.startsWith("transition") ? `a clip at ${clock(c.start)} has a transition`
           : k === "fx" ? `a clip at ${clock(c.start)} has a sound effect` : `a clip at ${clock(c.start)} has ${k} set`);
@@ -78,16 +86,24 @@
     videos.sort((a, b) => a.start - b.start);
     let at = 0;                                            // the timeline starts with the first clip, at 0
     const used = new Set();
-    for (const c of videos) {
+    for (let vi = 0; vi < videos.length; vi++) {
+      const c = videos[vi], next = videos[vi + 1];
       const m = media.get(c.mediaId), where = clock(c.start);
+      const tin = FAST_FADES.includes(c.transitionIn?.type) ? c.transitionIn : null;
+      const tout = FAST_FADES.includes(c.transitionOut?.type) ? c.transitionOut : null;
+      const cross = tin && tin.type === "cross" ? +tin.duration || 0 : 0;
+      if (cross && !vi) no(`the clip at ${where} cross fades with nothing before it`);
+      if (tout && tout.type === "cross") no(`the clip at ${where} has a cross fade on its end`);
+      const nextCross = next && next.transitionIn?.type === "cross" ? +next.transitionIn.duration || 0 : 0;
       if (!m || m.kind !== "video") { no(`the clip at ${where} is not a recording`); continue; }
       if (m.width && m.height && Math.abs(m.width / m.height - shape) > 0.01) no(`the recording at ${where} is a different shape from the project`);
       const ch = changed(c, ["volume", "pan", "audioChannel", "speed", "speedSound"]);
       if (ch) no(`the clip at ${where} has ${ch} changed`);
       const sp = speedOf(c, defaults);
       if (!(sp >= SPEED_MIN - 1e-9 && sp <= SPEED_MAX + 1e-9)) no(`the clip at ${where} plays at ${sp}x (the fast render takes 0.25x to 4x)`);
-      if (Math.abs(c.start - at) > tol) no(c.start > at ? `there is a gap before ${where}` : `clips overlap at ${where}`);
+      if (Math.abs(c.start - (at - cross)) > tol) no(c.start > at - cross ? `there is a gap before ${where}` : `clips overlap at ${where}`);
       at = c.start + c.duration;
+      const wantIn = tin, wantOut = nextCross ? { type: "cross", duration: nextCross } : tout;
       // its sound: its own untouched stereo pair (or the one clip of a mono recording), and the picture clip itself silent
       const mine = sounds.filter((s) => s.mediaId === c.mediaId && Math.abs(s.start - c.start) <= tol &&
         Math.abs(s.in - c.in) <= tol && Math.abs(s.duration - c.duration) <= tol);
@@ -102,12 +118,23 @@
           soundOf(s, defaults) === soundOf(mine[0], defaults);
       }) && (chans < 2 || new Set(mine.map((s) => (s.props || {}).audioChannel || 0)).size === 2);
       if (!good) no(`the sound of the clip at ${where} was changed, moved or removed`);
+      // its sound fades as its picture does (a fade or dip on the picture is on its stems too; a cross fade's sounds cross)
+      if (mine.length && !mine.every((s) => sameFade(FAST_FADES.includes(s.transitionIn?.type) ? s.transitionIn : null, wantIn, tol) &&
+        sameFade(FAST_FADES.includes(s.transitionOut?.type) ? s.transitionOut : null, wantOut, tol)))
+        no(`the sound of the clip at ${where} fades differently from its picture`);
+      if (tout && nextCross) no(`the clip at ${where} has a fade on its end and a cross fade after it`);
       const sound = mine.length ? soundOf(mine[0], defaults) : soundOf(c, defaults);
-      out.pieces.push({ file: fileOf(m.src || m.name), in: c.in, out: c.in + c.duration * sp, at: c.start, speed: sp, sound });
+      const piece = { file: fileOf(m.src || m.name), in: c.in, out: c.in + c.duration * sp, at: c.start, speed: sp, sound };
+      if (tin && tin.type !== "cross") { piece.fadeIn = +tin.duration; piece.fadeInColor = tin.type === "dip-white" ? "white" : "black"; }
+      if (tout) { piece.fadeOut = +tout.duration; piece.fadeOutColor = tout.type === "dip-white" ? "white" : "black"; }
+      if (cross) piece.cross = cross;
+      out.pieces.push(piece);
     }
     if (sounds.some((s) => !used.has(s))) no("there is other sound on the timeline (music, a voice-over, or sound moved off its picture)");
     out.duration = at;
 
+    if (opts.range && !why.length && out.pieces.some((p) => p.fadeIn || p.fadeOut || p.cross))
+      no("an IN–OUT range with fades in it");
     if (opts.range && !why.length) {                       // IN–OUT: the same pieces, trimmed to the range
       const a = Number(opts.range.start) || 0, b = Number(opts.range.end);
       out.pieces = out.pieces.map((p) => {                 // timeline seconds x speed = recording seconds
@@ -124,8 +151,9 @@
 
   /** The line the Export window shows. */
   function describe(p, hosted) {
-    if (p.ok && hosted) return { fast: true, text: "Method: fast render. This edit is only cuts, so Create Summat renders it straight from the recording." };
-    if (p.ok) return { fast: false, text: "Method: frame by frame. (Only cuts: inside Create Summat this would use its fast renderer.)" };
+    const fades = (p.pieces || []).some((x) => x.fadeIn || x.fadeOut || x.cross);
+    if (p.ok && hosted) return { fast: true, text: `Fast render. This edit is only cuts${fades ? " and fades" : ""}, so Create Summat renders it straight from the recording.` };
+    if (p.ok) return { fast: false, text: `Method: frame by frame. (Only cuts${fades ? " and fades" : ""}: inside Create Summat this would use its fast renderer.)` };
     return { fast: false, text: `Method: frame by frame, needed because ${p.why[0]}${p.why.length > 1 ? ` (and ${p.why.length - 1} more)` : ""}.` };
   }
 

@@ -93,7 +93,7 @@ test("the Export window uses it and says which method it is using", () => {
   const start = js.slice(js.indexOf("function startChosenExport()"), js.indexOf("function syncExportRangeSelect()"));
   assert.ok(start.indexOf("fastRenderChoice()") < start.indexOf("fastExport({ delivery: dlvSpec })"));   // the fast render is tried first
   assert.ok(start.includes("sendFastExport(quick);") && js.includes('$("xsMethod").textContent = method.text;'));
-  for (const [p, hosted, word] of [[{ ok: true, why: [] }, true, "fast render"], [{ ok: true, why: [] }, false, "frame by frame"],
+  for (const [p, hosted, word] of [[{ ok: true, why: [] }, true, "Fast render"],          // Steve, 23 Nov: shows "Fast render" [{ ok: true, why: [] }, false, "frame by frame"],
     [{ ok: false, why: ["there is a title at 0:05", "x"] }, true, "needed because there is a title at 0:05 (and 1 more)"]])
     assert.ok(C.describe(p, hosted).text.includes(word), word);
 });

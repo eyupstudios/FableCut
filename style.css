@@ -4721,3 +4721,54 @@ body.has-tabs .topbar-center { flex: 0 1 auto; max-width: 170px; overflow: hidde
 .thumb-mark .tm-flag { position: absolute; top: 0; left: 0; pointer-events: auto; cursor: pointer; background: #4DA3FF; color: #0B0B10; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 0 4px 4px 0; white-space: nowrap; }
 .thumb-mark .tm-del { position: absolute; top: 16px; left: 0; pointer-events: auto; border: 0; background: rgba(11,11,16,.8); color: #fff; font-size: 10px; border-radius: 0 4px 4px 0; padding: 0 4px; cursor: pointer; }
 #btnThumbFrame.on { border-color: #4DA3FF; color: #4DA3FF; }
+
+/* Fades and transitions (23 Nov 2026): the button on each join, its Transition menu */
+.join-btn {
+  position: absolute;
+  top: 50%;
+  z-index: 6;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 700 11px/1 "Segoe UI", system-ui, sans-serif;
+  color: #0b0b0e;
+  background: #d9dde6;
+  border: 1px solid #0b0b0e;
+  border-radius: 50%;
+  cursor: pointer;
+  opacity: 0.55;
+  user-select: none;
+}
+.join-btn:hover, .join-btn.set { opacity: 1; }
+.join-btn.set { background: #B6F23A; }
+.join-btn.set.dip-white { background: #ffffff; }
+.join-btn.set.dip-black { background: #B6F23A; }
+body.track-size-s .join-btn { width: 14px; height: 14px; margin: -7px 0 0 -7px; font-size: 9px; }
+.join-menu { padding: 8px 10px; min-width: 190px; }
+.join-menu .join-menu-title { font-weight: 700; margin: 0 0 6px; }
+.join-menu .join-opt { display: flex; align-items: center; gap: 8px; padding: 4px 2px; cursor: pointer; border-radius: 4px; }
+.join-menu .join-opt:hover { background: #ffffff14; }
+.join-menu .join-len { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.join-menu .join-len input { width: 64px; }
+.join-menu .join-btns { display: flex; justify-content: flex-end; margin-top: 8px; }
+
+/* Hover help (23 Nov 2026): a plain-words tip after half a second */
+.hover-tip {
+  position: fixed;
+  z-index: 20000;
+  max-width: 340px;
+  padding: 7px 10px;
+  font: 12.5px/1.4 "Segoe UI", system-ui, sans-serif;
+  color: #f2f3f5;
+  background: #101114f2;
+  border: 1px solid #3a3d46;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px #0009;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.hover-tip.on { opacity: 1; }
