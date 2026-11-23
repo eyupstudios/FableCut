@@ -804,6 +804,77 @@
       for (const x of movers) x.start = +(x.start + shift).toFixed(4);
       return d;
     }
+    /* ── Speed (Steve, 23 Nov 2026): "the sound must follow the speed of its clip, all linked sound tracks
+       included"; "at 0.5x a 10 s clip must become 20 s long (pushing later clips along); at 2x it becomes 5 s
+       ... Never lose footage." */
+    /** Recording seconds a clip plays (its In to where its tail lands in the recording). */
+    const sourceSpan = (x) => Math.max(0, timeAt(x, clipEnd(x)) - x.in);
+    /** How long a clip with a speed ramp runs to play `src` seconds of its recording. */
+    function rampLength(c, src) {
+      const base = clipSpeed(c), step = 1 / 120;
+      let t = 0, sum = 0, prev = clamp(kfChannel(c, "speed", 0, base), 0.1, 8);
+      while (sum < src - 1e-9 && t < 1e6) {
+        const cur = clamp(kfChannel(c, "speed", t + step, base), 0.1, 8), inc = ((prev + cur) / 2) * step;
+        if (sum + inc >= src) { t += (src - sum) / ((prev + cur) / 2); break; }
+        sum += inc; t += step; prev = cur;
+      }
+      return t;
+    }
+    /** Change the speed of c's linked group: `change(c)` sets c's speed (props.speed and/or keyframes.speed); the
+     *  picture and every linked sound clip take the same speed and sound choice, the group's length is refit so it
+     *  plays the same stretch of the recording as before (the longest any member played: nothing is lost), and the
+     *  clips after it move along like a ripple trim. Returns {length, shift} or a string saying why not. */
+    function respeedGroup(c, change) {
+      if (!c || !isMediaClip(c)) return "Speed works on video and sound clips";
+      const project = P();
+      const group = withLinked([c]).filter(isMediaClip);
+      if (group.some(isClipLocked)) return TRIM_LOCKED;
+      let src = Math.max(...group.map(sourceSpan));
+      for (const x of group) { const len = sourceLen(x); if (len > 0) src = Math.min(src, Math.max(0, len - x.in)); }
+      const oldDur = c.duration, oldEnd = clipEnd(c), wasRamp = hasSpeedRamp(c);
+      change(c);
+      const ramp = hasSpeedRamp(c);
+      const newDur = Math.max(MIN_DUR, ramp ? rampLength(c, src) : src / clipSpeed(c));
+      const d = newDur - oldDur;
+      const groupIds = new Set(group.map((x) => x.id));
+      const lanes = new Set(group.map((x) => x.track));
+      const movers = withoutLocked(withLinked(project.clips.filter((x) => !groupIds.has(x.id) &&
+        (isEditTarget(x.track) || lanes.has(x.track)) && !isTrackLocked(x.track) && x.start >= oldEnd - TRIM_EPS)));
+      const moverIds = new Set(movers.map((x) => x.id));
+      let leftRoom = Infinity;                                  // pulling left can't push a lane into what sits before it
+      const first = new Map();
+      for (const x of movers) first.set(x.track, Math.min(first.get(x.track) ?? Infinity, x.start));
+      for (const [tr, f] of first) {
+        let blockEnd = lanes.has(tr) ? c.start + newDur : 0;    // the group's own new tail
+        for (const x of project.clips)
+          if (x.track === tr && !moverIds.has(x.id) && !groupIds.has(x.id) && x.start < f - TRIM_EPS) blockEnd = Math.max(blockEnd, clipEnd(x));
+        leftRoom = Math.min(leftRoom, Math.max(0, f - blockEnd));
+      }
+      const shift = d >= 0 ? d : Math.max(d, -leftRoom);
+      const scale = !wasRamp && !ramp && oldDur > 0 ? newDur / oldDur : 1;   // fades / keys stay on the same moment of the recording
+      for (const x of group) {
+        x.props = { ...(x.props || {}) };
+        if (x !== c) {
+          x.props.speed = c.props.speed;
+          if (c.props.speedSound != null) x.props.speedSound = c.props.speedSound;
+          const kf = { ...(x.keyframes || {}) };
+          if (ramp) kf.speed = c.keyframes.speed.map((k) => ({ ...k })); else delete kf.speed;
+          x.keyframes = Object.keys(kf).length ? kf : undefined;
+        }
+        x.start = c.start;
+        x.in = c.in;
+        x.duration = newDur;
+        if (scale !== 1 && x.keyframes) {
+          const kf = {};
+          for (const [k, arr] of Object.entries(x.keyframes)) kf[k] = arr.map((e) => ({ ...e, t: +(e.t * scale).toFixed(4) }));
+          x.keyframes = kf;
+        }
+        if (x.keyframes && !Object.keys(x.keyframes).length) x.keyframes = undefined;
+        clampTransitions(x);
+      }
+      if (Math.abs(shift) > 1e-9) for (const x of movers) x.start = +(x.start + shift).toFixed(4);
+      return { length: newDur, shift };
+    }
     /** Roll edit: move the cut on c's head or tail. The clip on the other side
      *  gives or takes the same amount, so nothing downstream moves. With no clip
      *  butting against that edge, it trims into the free room only. */
@@ -983,7 +1054,7 @@
       gapAt, closeGapAt, listAlignedGaps,
       sourceEditTracks, sourceReplacePunchTracks, placeSourceWindowClips, punchTrackRange, insertAt, overwriteAt,
       maxClipDur, groupMaxDur, groupHeadRoom, adjacentClip, freeRoom,
-      rippleTrim, rollEdit, slipClip, slideClip, liftRange,
+      rippleTrim, rollEdit, slipClip, slideClip, liftRange, respeedGroup, rampLength,
       crossfadeCuts, crossfadeCut, crossfadePairs, crossfadeCutsNear,
     };
   }

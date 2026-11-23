@@ -4672,3 +4672,8 @@ body.hosted .logo span { display: none; }
 #btnSpeed .btn-cap { font-size: 11px; opacity: .8; }
 #btnSpeed #btnSpeedRate { margin-left: 5px; }
 #btnSpeed { width: auto; padding: 0 8px; white-space: nowrap; }
+
+/* Speed section at the top of the Inspector (23 Nov): quick buttons beside the slider */
+.insp-speed .speed-quick { display: flex; gap: 4px; flex-wrap: wrap; }
+.insp-speed .speed-quick .btn.tiny { min-width: 44px; }
+.insp-speed .speed-quick .btn.tiny.on { border-color: var(--accent); background: #69BE2855; color: #fff; }

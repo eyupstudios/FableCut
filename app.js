@@ -1073,7 +1073,9 @@ function applyInspectorReset(keys, channelWide) {
   pushUndo();
   let refused = false;
   for (const k of keys) {
-    if (channelWide) resetPropChannel(c, k);
+    if (k === "speed" && (c.kind === "video" || c.kind === "audio")) {   // the length and linked sound follow
+      refused = !respeedClip(c, (x) => (channelWide ? (resetPropChannel(x, k), true) : resetPropAtPlayhead(x, k))) || refused;
+    } else if (channelWide) resetPropChannel(c, k);
     else refused = !resetPropAtPlayhead(c, k) || refused;
   }
   if (refused) toast("Move the playhead over the clip to edit its keyframes");
@@ -4176,6 +4178,45 @@ const SPEED_SOUNDS = [["normal", "Normal pitch"], ["deep", "Deep (like tape)"], 
 function clipSpeedSound(c) { const v = c?.props?.speedSound; return v === "deep" || v === "mute" ? v : "normal"; }
 /** Is this clip's speed changed (constant or ramped)? */
 function speedChanged(c) { return hasSpeedRamp(c) || Math.abs(clipSpeed(c) - 1) > 1e-9; }
+/** Any change to a clip's speed (Steve, 23 Nov): the picture and all its linked sound clips take it, the clip's
+ *  length changes so the same stretch of the recording plays (0.5× → twice as long), and later clips move along.
+ *  `mutate(c)` makes the change on c; it returns false when nothing could be changed. */
+function respeedClip(c, mutate) {
+  let ok = true;
+  const r = EDIT.respeedGroup(c, (x) => { ok = mutate(x) !== false; });
+  if (typeof r === "string") { toast(r); return false; }
+  for (const x of withLinked([c])) speedIntCache.delete(x.id);
+  inspPropGen++;
+  refreshAudioHoldFor("speed");
+  state.dirtyTimeline = true;
+  return ok;
+}
+/** A steady speed (the slider without keyframes, the quick buttons): `constant` also removes a speed ramp. */
+function setClipSpeed(c, v, constant = false) {
+  const sp = clamp(+v || 1, 0.25, 4);
+  return respeedClip(c, (x) => {
+    if (hasSpeedRamp(x) && !constant) return setAnimProp(x, "speed", sp);   // a ramp: its key at the playhead
+    if (x.keyframes?.speed) { delete x.keyframes.speed; if (!Object.keys(x.keyframes).length) x.keyframes = undefined; }
+    x.props.speed = sp;
+    return true;
+  });
+}
+const SPEED_QUICK = [0.25, 0.5, 1, 2];
+/** The Inspector's Speed section (Steve, 23 Nov: "its own section at the top of the Inspector, always open: speed
+ *  slider + quick buttons (0.25x, 0.5x, 1x, 2x) + the sound menu"). */
+function speedSectionHtml(c, p, slider, row) {
+  const ramp = hasSpeedRamp(c), sp = clipSpeed(c);
+  const quick = SPEED_QUICK.map((v) => `<button type="button" class="btn tiny${!ramp && Math.abs(sp - v) < 1e-9 ? " on" : ""}" data-speed-set="${v}"
+    title="Play this clip and its sound at ${v}× — its length changes to match and the clips after it move along">${v}×</button>`).join("");
+  const src = EDIT.withLinked([c]).filter((x) => x.kind === "video" || x.kind === "audio").length;
+  return `<div class="insp-section insp-speed"><h3>Speed</h3>
+    ${slider("speed", 0.25, 4, 0.05, p.speed, "×")}
+    ${row("Quick", `<span class="insp-ctrls speed-quick">${quick}</span>`)}
+    ${row("Sound when sped up or slowed", `<select data-k="speedSound" title="What the sound does when this clip plays faster or slower: Normal pitch keeps voices sounding normal; Deep slows it like tape (deeper when slowed, higher when sped up); Mute is silent while the speed is changed. Preview and export sound the same.">${SPEED_SOUNDS.map(([v, label]) =>
+      `<option value="${v}" ${v === clipSpeedSound(c) ? "selected" : ""}>${label}</option>`).join("")}</select>`, "", "speedSound")}
+    <div class="insp-note">${src > 1 ? `The picture and its ${src - 1} sound clip${src > 2 ? "s" : ""} change together. ` : ""}Slower makes the clip longer (0.5× = twice as long), faster makes it shorter; the clips after it move along, so no footage is lost.${ramp ? " This clip has a speed ramp: the slider sets the key at the playhead; a quick button replaces the ramp with one speed." : ""}</div>
+  </div>`;
+}
 function syncLinkedTiming(c) {
   for (const L of withLinked([c])) {
     if (L.id === c.id) continue;
@@ -6900,7 +6941,8 @@ function renderInspector(lite) {
   };
   let html = (state.selIds.size > 1
     ? `<div class="insp-multi">${state.selIds.size} clips selected — drag moves them together, Del deletes all. Fields below edit the primary (white-outlined) clip.</div>`
-    : "") + clipStatusBar(c) + `<div class="insp-section"><h3>Clip — ${c.kind}</h3>
+    : "") + clipStatusBar(c) + (c.kind === "video" || c.kind === "audio" ? speedSectionHtml(c, p, slider, row) : "")
+    + `<div class="insp-section"><h3>Clip — ${c.kind}</h3>
     ${row("Name", `<input type="text" data-k="name" value="${escapeHtml(c.name || "")}">`)}
     ${c.mediaId ? row("Source", `<button type="button" class="btn tiny style-picker-btn" data-media-open title="Replace this clip's media — keeps position, trim, keyframes and effects">${escapeHtml((getMedia(c.mediaId) || {}).name || "Missing media")} ▾</button>`) : ""}
     ${row("Start (s)", `<input type="number" data-k="start" step="0.01" value="${c.start.toFixed(2)}">`)}
@@ -7025,9 +7067,6 @@ function renderInspector(lite) {
         `<option value="${v}" ${v === clipDenoise(c) ? "selected" : ""}>${v[0].toUpperCase() + v.slice(1)}</option>`).join("")}</select></span>`)}
       ${slider("volume", 0, 2, 0.01, p.volume)}
       ${slider("pan", -1, 1, 0.01, p.pan)}
-      ${slider("speed", 0.25, 4, 0.05, p.speed, "×")}
-      ${row("Sound when sped up or slowed", `<select data-k="speedSound" title="What the sound does when this clip plays faster or slower: Normal pitch keeps voices sounding normal; Deep slows it like tape (deeper when slowed, higher when sped up); Mute is silent while the speed is changed. Preview and export sound the same.">${SPEED_SOUNDS.map(([v, label]) =>
-        `<option value="${v}" ${v === clipSpeedSound(c) ? "selected" : ""}>${label}</option>`).join("")}</select>`, "", "speedSound")}
     </div>`;
   }
   if ((c.kind === "video" || c.kind === "audio") && typeof FableCutSilence !== "undefined") {
@@ -7209,6 +7248,9 @@ function renderInspector(lite) {
           state.dirtyTimeline = true;
         }
       }
+      else if (k === "speed" && (c.kind === "video" || c.kind === "audio")) {   // the linked sound and the length follow
+        if (!setClipSpeed(c, v)) toast("Move the playhead over the clip to edit its keyframes");
+      }
       else if (ANIMATABLE.includes(k)) {
         if (!setAnimProp(c, k, v))
           toast("Move the playhead over the clip to edit its keyframes");
@@ -7233,6 +7275,15 @@ function renderInspector(lite) {
       pushUndo();
       if (ANIMATABLE.includes(k) && state.playing) pause();
     }, { once: true });
+    if (k === "speed") input.addEventListener("change", () => { if (input.isConnected) renderInspector(); });   // the new Length
+  });
+  els.inspector.querySelectorAll("[data-speed-set]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (isGroupLocked(c)) { toastLocked(); return; }
+      pushUndo();
+      setClipSpeed(c, +btn.dataset.speedSet, true);
+      scheduleSave(); renderInspector();
+    });
   });
   els.inspector.querySelectorAll("[data-action]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -7338,7 +7389,8 @@ function renderInspector(lite) {
   els.inspector.querySelectorAll("[data-kf]").forEach((btn) => {
     btn.addEventListener("click", () => {
       pushUndo();
-      if (!toggleKfAtPlayhead(c, btn.dataset.kf)) // owns dirtyTimeline on success
+      const toggle = () => toggleKfAtPlayhead(c, btn.dataset.kf);
+      if (!(btn.dataset.kf === "speed" && (c.kind === "video" || c.kind === "audio") ? respeedClip(c, toggle) : toggle())) // owns dirtyTimeline on success
         toast("Move the playhead over the clip to add or remove keyframes");
       scheduleSave(); renderInspector();
     });
@@ -7346,9 +7398,14 @@ function renderInspector(lite) {
   els.inspector.querySelectorAll("[data-kfclear]").forEach((btn) => {
     btn.addEventListener("click", () => {
       pushUndo();
-      delete c.keyframes[btn.dataset.kfclear]; // raw mutation — owns its own side effects
+      const clear = (x) => {
+        if (!x.keyframes) return;
+        delete x.keyframes[btn.dataset.kfclear]; // raw mutation — owns its own side effects
+        if (!Object.keys(x.keyframes).length) x.keyframes = undefined;
+      };
+      if (btn.dataset.kfclear === "speed" && (c.kind === "video" || c.kind === "audio")) respeedClip(c, clear);
+      else clear(c);
       refreshAudioHoldFor(btn.dataset.kfclear);
-      if (!Object.keys(c.keyframes).length) c.keyframes = undefined;
       state.dirtyTimeline = true;
       scheduleSave(); renderInspector();
     });
