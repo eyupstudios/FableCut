@@ -36,3 +36,8 @@ test("the editor draws, saves and sends the boxes without touching the edit", ()
   assert.ok(app.includes("paintShortBoxes()") && app.includes("ShortBoxes.normalize(data.shortBoxes)") && app.includes("shortBoxes: project.shortBoxes"));
   assert.ok(src.includes('type: "make-short"') && src.includes("Create Short") && !/project\.clips\s*=/.test(src));   // never edits clips
 });
+
+test("clips under a box can still be clicked: only its bar and handles take the mouse", () => {
+  const css = fs.readFileSync(path.join(__dirname, "..", "style.css"), "utf8");
+  assert.ok(/\.short-box \{[^}]*pointer-events: none/.test(css) && /\.short-box \.sb-bar, \.short-box \.sb-h \{ pointer-events: auto/.test(css));
+});
