@@ -34,7 +34,10 @@ test("the editor draws, saves and sends the boxes without touching the edit", ()
   const src = fs.readFileSync(path.join(__dirname, "..", "short-boxes.js"), "utf8");
   assert.ok(html.includes('id="btnAddShort"') && html.includes('src="short-boxes.js"'));
   assert.ok(app.includes("paintShortBoxes()") && app.includes("ShortBoxes.normalize(data.shortBoxes)") && app.includes("shortBoxes: project.shortBoxes"));
-  assert.ok(src.includes('type: "make-short"') && src.includes("Create Short") && !/project\.clips\s*=/.test(src));   // never edits clips
+  assert.ok(src.includes('type: "make-short"') && src.includes(">Export</button>") && src.includes(">Download</button>") && !/project\.clips\s*=/.test(src));   // never edits clips
+  // 23 Nov (2): Export Shorts (N) for all of them; a box goes once its Short is made (Create Summat says so)
+  assert.ok(html.includes('id="btnExportShorts"') && app.includes("exportAllShorts()") && src.includes("Export Shorts (${ready})"));
+  assert.ok(src.includes('d.type === "short-done"') && src.includes("project.shortBoxes = boxes.filter((x) => x.id !== d.box)") && src.includes("box: { id: b.id"));
 });
 
 test("clips under a box can still be clicked: only its bar and handles take the mouse", () => {

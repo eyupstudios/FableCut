@@ -18,13 +18,13 @@ test("the Export window: Cancel / Add to queue / Download / Export to Ready to p
   assert.ok(/class="btn primary" id="btnStartExport"/.test(html) && html.indexOf('id="xsWhere"') > order[3]);
   const init = js.slice(js.indexOf("function initSendToReadyToPost()"), js.indexOf("async function downloadExport()"));
   for (const need of ['"Export to Ready to post" : "Export"', '$("btnDownloadExport")?.classList.toggle("hidden", !cs)', "Export to Ready to post:</b>",
-    "Download:</b> all of that, plus a copy in", "Create Summat's Library", 'askHost("where"'])
+    "Download:</b> just the file, saved in", "No Ready to post page", "Create Summat's Library", 'askHost("where"'])   // 23 Nov (2): Download = just the file
     assert.ok(init.includes(need), need);
   const dl = js.slice(js.indexOf("async function downloadExport()"), js.indexOf("function sendToReadyToPost("));
   for (const need of ['askHost("choose-folder", { start: getSetting("downloadFolder")', 'setSetting("downloadFolder", r.path)', "pendingDownload = { folder: r.path }", "startChosenExport()"])
     assert.ok(dl.includes(need), need);
   assert.ok(/downloadFolder: "",/.test(js));                       // kept between sessions (setSetting only keeps listed keys)
-  assert.ok(js.includes("send: true, copy_to: copy }"));          // the fast render: always to Ready to post, the copy if asked
+  assert.ok(js.includes("send: !copy, download: !!copy, copy_to: copy, thumb_at: thumbAtInExport(fps) }"));   // fast render: a page, or (Download) just the file
 });
 
 test("every export route hands the file over (and only then skips the download), with Download's folder", () => {
@@ -33,12 +33,12 @@ test("every export route hands the file over (and only then skips the download),
   assert.ok(fn.includes('source: "fablecut", type: "exported"') && fn.includes("hostWindow().postMessage("));
   const posted = [];
   const make = (hosted, folder) => new Function("hostWindow", "project", "toast", "inCreateSummat", "folder",
-    "let pendingDownload = folder ? { folder } : null;" + fn + "; return sendToReadyToPost;")(
+    "let pendingDownload = folder ? { folder } : null; const thumbAtInExport = () => null;" + fn + "; return sendToReadyToPost;")(
     () => ({ postMessage: (m) => posted.push(m) }), { name: "Mission 2 edit" }, () => {}, () => hosted, folder);
   assert.equal(make(true)("/exports/Mission%202%20edit.mp4"), true);
   assert.equal(make(true, "D:\\Videos")("/exports/x.mp4"), true);
-  assert.deepEqual(posted, [{ source: "fablecut", type: "exported", project: "Mission 2 edit", file: "Mission 2 edit.mp4", copy_to: "" },
-    { source: "fablecut", type: "exported", project: "Mission 2 edit", file: "x.mp4", copy_to: "D:\\Videos" }]);
+  assert.deepEqual(posted, [{ source: "fablecut", type: "exported", project: "Mission 2 edit", file: "Mission 2 edit.mp4", copy_to: "", download: false, thumb_at: null },
+    { source: "fablecut", type: "exported", project: "Mission 2 edit", file: "x.mp4", copy_to: "D:\\Videos", download: true, thumb_at: null }]);
   assert.equal(make(false)("/exports/x.mp4"), false);              // outside Create Summat: the browser downloads it
   assert.equal(make(true)(""), false);
   assert.equal(posted.length, 2);
