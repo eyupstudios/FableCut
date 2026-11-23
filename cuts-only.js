@@ -9,7 +9,9 @@
    It says yes ONLY when it can see that the picture and the sound of the export would be the recording's own,
    cut: every doubt is a "no" with its reason, and the normal frame-by-frame export is used.
      - only video clips of recordings, on one track, one after the other from the start, no gaps, no overlaps;
-     - nothing changed on them (every property as the editor sets it), no keyframes, no transitions, speed 1;
+     - nothing changed on them (every property as the editor sets it), no keyframes, no transitions; a constant
+       speed (0.25x to 4x, 23 Nov) is fine: the picture and its sound share it, and the piece carries it with the
+       sound choice (props.speedSound: normal / deep / mute);
      - each one's sound is its own untouched stereo pair (channel 1 left, channel 2 right, full level), nothing else
        on any sound track, no track / bus / master level or effect;
      - the recording has the project's shape (no bars, no crop).
@@ -29,6 +31,10 @@
   const clock = (t) => { t = Math.max(0, Math.round(t)); const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
     return h ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`; };
   const fileOf = (src) => { try { return decodeURIComponent(String(src || "").split(/[\\/]/).pop()); } catch { return String(src || "").split(/[\\/]/).pop(); } };
+
+  const SPEED_MIN = 0.25, SPEED_MAX = 4, SOUNDS = ["normal", "deep", "mute"];
+  const speedOf = (c, d) => { const v = Number((c.props || {}).speed != null ? c.props.speed : d.speed); return v > 0 ? v : 1; };
+  const soundOf = (c, d) => { const v = (c.props || {}).speedSound != null ? c.props.speedSound : d.speedSound; return SOUNDS.includes(v) ? v : "normal"; };
 
   function plan(project, defaults, opts = {}) {
     const why = [];
@@ -76,8 +82,10 @@
       const m = media.get(c.mediaId), where = clock(c.start);
       if (!m || m.kind !== "video") { no(`the clip at ${where} is not a recording`); continue; }
       if (m.width && m.height && Math.abs(m.width / m.height - shape) > 0.01) no(`the recording at ${where} is a different shape from the project`);
-      const ch = changed(c, ["volume", "pan", "audioChannel"]);
-      if (ch) no(ch === "speed" ? `the clip at ${where} is sped up or slowed down` : `the clip at ${where} has ${ch} changed`);
+      const ch = changed(c, ["volume", "pan", "audioChannel", "speed", "speedSound"]);
+      if (ch) no(`the clip at ${where} has ${ch} changed`);
+      const sp = speedOf(c, defaults);
+      if (!(sp >= SPEED_MIN - 1e-9 && sp <= SPEED_MAX + 1e-9)) no(`the clip at ${where} plays at ${sp}x (the fast render takes 0.25x to 4x)`);
       if (Math.abs(c.start - at) > tol) no(c.start > at ? `there is a gap before ${where}` : `clips overlap at ${where}`);
       at = c.start + c.duration;
       // its sound: its own untouched stereo pair (or the one clip of a mono recording), and the picture clip itself silent
@@ -89,21 +97,24 @@
       const good = pv === 0 && mine.length === Math.min(chans, 2) && mine.every((s) => {
         const p = s.props || {}, n = p.audioChannel == null ? 0 : p.audioChannel;
         const pan = chans >= 2 ? (n === 0 ? -1 : 1) : 0;
-        return (p.volume == null ? 1 : p.volume) === 1 && (p.pan == null ? 0 : p.pan) === pan && !changed(s, ["volume", "pan", "audioChannel"]);
+        return (p.volume == null ? 1 : p.volume) === 1 && (p.pan == null ? 0 : p.pan) === pan &&
+          !changed(s, ["volume", "pan", "audioChannel", "speed", "speedSound"]) && Math.abs(speedOf(s, defaults) - sp) < 1e-9 &&
+          soundOf(s, defaults) === soundOf(mine[0], defaults);
       }) && (chans < 2 || new Set(mine.map((s) => (s.props || {}).audioChannel || 0)).size === 2);
       if (!good) no(`the sound of the clip at ${where} was changed, moved or removed`);
-      out.pieces.push({ file: fileOf(m.src || m.name), in: c.in, out: c.in + c.duration, at: c.start });
+      const sound = mine.length ? soundOf(mine[0], defaults) : soundOf(c, defaults);
+      out.pieces.push({ file: fileOf(m.src || m.name), in: c.in, out: c.in + c.duration * sp, at: c.start, speed: sp, sound });
     }
     if (sounds.some((s) => !used.has(s))) no("there is other sound on the timeline (music, a voice-over, or sound moved off its picture)");
     out.duration = at;
 
     if (opts.range && !why.length) {                       // IN–OUT: the same pieces, trimmed to the range
       const a = Number(opts.range.start) || 0, b = Number(opts.range.end);
-      out.pieces = out.pieces.map((p) => {
-        const s = Math.max(p.at, a), e = Math.min(p.at + (p.out - p.in), b);
-        return e - s > tol ? { file: p.file, in: p.in + (s - p.at), out: p.in + (e - p.at), at: s } : null;
+      out.pieces = out.pieces.map((p) => {                 // timeline seconds x speed = recording seconds
+        const s = Math.max(p.at, a), e = Math.min(p.at + (p.out - p.in) / p.speed, b);
+        return e - s > tol ? { ...p, in: p.in + (s - p.at) * p.speed, out: p.in + (e - p.at) * p.speed, at: s } : null;
       }).filter(Boolean);
-      out.duration = out.pieces.reduce((n, p) => n + (p.out - p.in), 0);
+      out.duration = out.pieces.reduce((n, p) => n + (p.out - p.in) / p.speed, 0);
       if (!out.pieces.length) no("the IN–OUT range is empty");
     }
     out.ok = !why.length;
@@ -118,5 +129,10 @@
     return { fast: false, text: `Method: frame by frame, needed because ${p.why[0]}${p.why.length > 1 ? ` (and ${p.why.length - 1} more)` : ""}.` };
   }
 
-  return { plan, describe, CLIP_KEYS, PROJECT_KEYS };
+  /** Smooth slow-mo: the extra seconds of work it adds (Create Summat's cutsrender.SMOOTH_X model, 23 Nov). */
+  const SMOOTH_X = 20.3;
+  function slowedSeconds(p) { return (p.pieces || []).filter((x) => x.speed < 1 - 1e-9).reduce((n, x) => n + (x.out - x.in) / x.speed, 0); }
+  function smoothExtraSeconds(p, fps, height) { return slowedSeconds(p) * SMOOTH_X * Math.pow(height / 1080, 1.6) * (fps / 60); }
+
+  return { plan, describe, slowedSeconds, smoothExtraSeconds, SMOOTH_X, SOUNDS, CLIP_KEYS, PROJECT_KEYS };
 });

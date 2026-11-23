@@ -43,7 +43,7 @@ test("anything that is not a plain cut is a no, and it says why", () => {
   no((p) => p.clips.push({ id: "t", kind: "text", track: "V2", start: 5, duration: 4, props: { ...DEFAULTS, text: "PART 3" } }), "title");
   no((p) => { p.clips[0].keyframes = { opacity: [{ t: 0, v: 0 }, { t: 1, v: 1 }] }; }, "animated");
   no((p) => { p.clips[3].transitionIn = { type: "fade", duration: 1 }; }, "transition");
-  no((p) => { p.clips[0].props.speed = 2; }, "sped up");
+  no((p) => { p.clips[0].props.speed = 2; }, "sound");                     // the picture sped up, its sound not: out of step
   no((p) => { p.clips[0].props.brightness = 120; }, "brightness");
   no((p) => { p.clips[0].props.scale = 1.2; }, "scale");
   no((p) => { p.clips[0].props.cropL = 10; }, "cropL");

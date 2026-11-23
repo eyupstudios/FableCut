@@ -4665,3 +4665,10 @@ body.hosted .logo span { display: none; }
 .export-dialog:not(.adv-open) #btnOpenQueue, .export-dialog:not(.adv-open) #btnBatchExport { display: none; }
 .xs-method { margin: 0; min-height: 1.3em; font-weight: 600; }
 .xs-force { display: flex; gap: 8px; align-items: center; margin: 4px 0 10px; cursor: pointer; }
+
+/* 23 Nov: Smooth slow-mo on the Export window; the monitor's "Preview speed" button */
+.xs-smooth { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin: 6px 0 0; font-size: 12px; }
+.xs-smooth label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+#btnSpeed .btn-cap { font-size: 11px; opacity: .8; }
+#btnSpeed #btnSpeedRate { margin-left: 5px; }
+#btnSpeed { width: auto; padding: 0 8px; white-space: nowrap; }

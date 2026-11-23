@@ -94,7 +94,28 @@ function createPeaks({ dir, resolveSrc, probe, ffmpeg = "ffmpeg" }) {
     res.on("close", () => { try { p.kill(); } catch { } });
   }
 
-  return { get, streamAudio, RATE };
+  /* The sound of [from, from+len] of a file played at `speed` with its pitch kept (ffmpeg atempo; one stage takes
+     0.5 to 2, so 0.25 is two of 0.5 and 4 two of 2), every channel kept: "Normal pitch" in the export mix (23 Nov). */
+  function tempoChain(speed) {
+    const parts = []; let left = speed;
+    while (left < 0.5 - 1e-9) { parts.push("atempo=0.5"); left /= 0.5; }
+    while (left > 2 + 1e-9) { parts.push("atempo=2.0"); left /= 2; }
+    parts.push("atempo=" + left.toFixed(6));
+    return parts.join(",");
+  }
+  function streamStretch(src, from, len, speed, res) {
+    const file = resolveSrc(src);
+    if (!file) { res.writeHead(404); res.end(); return; }
+    if (!(from >= 0) || !(len > 0) || !(speed >= 0.25 && speed <= 4)) { res.writeHead(400); res.end(); return; }
+    const p = spawn(ffmpeg, ["-v", "error", "-nostdin", "-ss", from.toFixed(4), "-t", len.toFixed(4), "-i", file, "-vn",
+      "-af", tempoChain(speed), "-acodec", "pcm_s16le", "-f", "wav", "pipe:1"], { windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+    res.writeHead(200, { "Content-Type": "audio/wav", "Cache-Control": "no-store" });
+    p.stdout.pipe(res);
+    p.on("error", () => { try { res.end(); } catch { } });
+    res.on("close", () => { try { p.kill(); } catch { } });
+  }
+
+  return { get, streamAudio, streamStretch, tempoChain, RATE };
 }
 
 module.exports = { createPeaks, RATE };

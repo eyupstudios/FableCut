@@ -157,7 +157,7 @@
           <button class="btn icon" id="btnFwd" title="Forward 1 frame (→)">▶︎</button>
           <button class="btn icon" id="btnEnd" title="Go to end (End)">⏭</button>
           <button class="btn icon" id="btnMarkOut" title="Mark Out (O) — Source marks when Source is active; timeline work area in Program">O</button>
-          <button class="btn icon toggle" id="btnSpeed" title="Preview speed — click to cycle 1×/1.5×/2×/4×. L forward · J reverse (tap again = faster) · K stop. Preview only, not export.">1×</button>
+          <button class="btn icon toggle" id="btnSpeed" title="Preview speed — how fast the monitor plays while you watch: click to cycle 1×/1.5×/2×/4×. L forward · J reverse (tap again = faster) · K stop. Preview only, never the export (a clip's own speed is in the Inspector)."><span class="btn-cap">Preview speed</span> <span id="btnSpeedRate">1×</span></button>
         </div>
         <div class="transport-end">
           <button type="button" class="btn icon hidden" id="btnInsert" title="Insert Source In→Out at the timeline playhead (,)" aria-label="Insert">
@@ -318,6 +318,11 @@
         <div class="xs-seg" id="xsQual" role="group" aria-label="Quality"></div></div>
       <p class="xs-est" id="xsEst" role="status"></p>
       <p class="xs-method" id="xsMethod" role="status"></p>
+      <div class="xs-smooth" id="xsSmoothRow" hidden>
+        <label title="Makes new in-between frames for the slowed pieces (motion interpolation), so slow motion looks smooth instead of each frame shown twice. Only the slowed pieces; the rest is untouched.">
+          <input type="checkbox" id="xsSmooth"> Smooth slow-mo <span class="dim">(slower to make)</span></label>
+        <span class="dim" id="xsSmoothCost"></span>
+      </div>
     </div>
     <details class="xs-adv" id="exportAdvanced">
     <summary>Advanced <span class="dim">codec, bitrate, ProRes, Broadcast, Master, Archive, encoding profiles, the export method, batch and queue</span></summary>

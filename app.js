@@ -55,6 +55,7 @@ const DEFAULT_PROPS = {
   channelMode: "stereo",                       // stereo | mono | left | right | swap
   duck: 0,                                     // ducking, dB (≤ 0) — keyframed by Auto-duck, multiplies volume
   speed: 1,                                    // playback rate (video/audio)
+  speedSound: "normal",                        // the sound when the speed is changed: normal (pitch kept) | deep | mute
   brightness: 100, contrast: 100, saturation: 100, hue: 0,
   blur: 0, grayscale: 0, sepia: 0, invert: 0,
   temperature: 0, tint: 0, vignette: 0,        // color grade extensions
@@ -1894,6 +1895,23 @@ function getAudioBuffer(m) {
   }
   const u = audioUse.get(src);
   if (u) u.last = Date.now(); else audioUse.set(src, { last: Date.now(), buf: null });
+  return p;
+}
+/** A clip's whole source window at its constant speed with the pitch kept (the server's /api/audio/stretch), for the
+ *  export mix: "Normal pitch" (23 Nov). Kept for the export only, keyed by file, window and speed. */
+const stretchBufs = new Map();
+function getStretchBuffer(m, c) {
+  const sp = clipSpeed(c), from = Math.max(0, c.in), len = c.duration * sp;
+  const key = `${m.src}|${from.toFixed(4)}|${len.toFixed(4)}|${sp}`;
+  let p = stretchBufs.get(key);
+  if (!p) {
+    p = fetch(`/api/audio/stretch?src=${encodeURIComponent(m.src)}&from=${from.toFixed(4)}&len=${len.toFixed(4)}&speed=${sp}`)
+      .then((r) => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); })
+      .then((ab) => getDecodeCtx().decodeAudioData(ab));
+    stretchBufs.set(key, p);
+    p.catch(() => stretchBufs.delete(key));
+    if (stretchBufs.size > 64) stretchBufs.delete(stretchBufs.keys().next().value);
+  }
   return p;
 }
 /** The decoded sound only if it is already in memory (audio hold while scrubbing never starts a decode). */
@@ -4153,6 +4171,11 @@ function toggleLinkSelected() {
   state.dirtyTimeline = true;
   scheduleSave(); renderInspector();
 }
+/* The sound when a clip's speed is changed (23 Nov): the same in preview and export. */
+const SPEED_SOUNDS = [["normal", "Normal pitch"], ["deep", "Deep (like tape)"], ["mute", "Mute"]];
+function clipSpeedSound(c) { const v = c?.props?.speedSound; return v === "deep" || v === "mute" ? v : "normal"; }
+/** Is this clip's speed changed (constant or ramped)? */
+function speedChanged(c) { return hasSpeedRamp(c) || Math.abs(clipSpeed(c) - 1) > 1e-9; }
 function syncLinkedTiming(c) {
   for (const L of withLinked([c])) {
     if (L.id === c.id) continue;
@@ -4162,6 +4185,10 @@ function syncLinkedTiming(c) {
     if (c.props?.speed != null) {
       L.props = L.props || {};
       L.props.speed = c.props.speed;
+    }
+    if (c.props?.speedSound != null) {
+      L.props = L.props || {};
+      L.props.speedSound = c.props.speedSound;
     }
   }
 }
@@ -6999,6 +7026,8 @@ function renderInspector(lite) {
       ${slider("volume", 0, 2, 0.01, p.volume)}
       ${slider("pan", -1, 1, 0.01, p.pan)}
       ${slider("speed", 0.25, 4, 0.05, p.speed, "×")}
+      ${row("Sound when sped up or slowed", `<select data-k="speedSound" title="What the sound does when this clip plays faster or slower: Normal pitch keeps voices sounding normal; Deep slows it like tape (deeper when slowed, higher when sped up); Mute is silent while the speed is changed. Preview and export sound the same.">${SPEED_SOUNDS.map(([v, label]) =>
+        `<option value="${v}" ${v === clipSpeedSound(c) ? "selected" : ""}>${label}</option>`).join("")}</select>`, "", "speedSound")}
     </div>`;
   }
   if ((c.kind === "video" || c.kind === "audio") && typeof FableCutSilence !== "undefined") {
@@ -7183,6 +7212,10 @@ function renderInspector(lite) {
       else if (ANIMATABLE.includes(k)) {
         if (!setAnimProp(c, k, v))
           toast("Move the playhead over the clip to edit its keyframes");
+      }
+      else if (k === "speedSound") {                    // the picture and its sound stems share it
+        for (const x of withLinked([c])) { x.props = x.props || {}; x.props.speedSound = SPEED_SOUNDS.some(([s]) => s === v) ? String(v) : "normal"; }
+        state.dirtyTimeline = true; inspPropGen++;
       }
       else if (k === "matte" || k === "matteTrack") {   // "none" / "" (= the track above) clear the prop
         if (v === "none" || v === "") delete c.props[k]; else c.props[k] = String(v);
@@ -11017,7 +11050,8 @@ function playRate() { return state.exporting ? 1 : state.previewRate; }
 // Negative = reverse (J). Reverse playback seeks frame by frame and is silent.
 function setPreviewRate(r) {
   state.previewRate = r;
-  els.btnSpeed.textContent = (r < 0 ? "◀" + -r : r) + "×";
+  const rate = $("btnSpeedRate") || els.btnSpeed;               // the button reads "Preview speed 1×" (23 Nov)
+  rate.textContent = (r < 0 ? "◀" + -r : r) + "×";
   els.btnSpeed.classList.toggle("on", r !== 1);
 }
 function cyclePreviewRate(dir) { // wrap around — for the toolbar button
@@ -11070,11 +11104,15 @@ function syncMedia() {
       const sp = clamp(+p.speed || 1, 0.1, 8);
       const eff = clamp(sp * playRate(), 0.0625, 16); // preview speed rides on top of clip speed
       if (el.playbackRate !== eff) { try { el.playbackRate = eff; } catch {} }
+      const how = speedChanged(c) ? clipSpeedSound(c) : "normal";
+      const keep = !(how === "deep" || (how === "normal" && hasSpeedRamp(c)));
+      if (el.preservesPitch !== keep) { try { el.preservesPitch = keep; } catch {} }
       if (el.paused) el.play().catch(() => {});
       if (Math.abs(el.currentTime - mt) > 0.25 * eff) { try { el.currentTime = mt; } catch {} }
       const chain = runtime.clipGain.get(c.id);
-      if (chain?.vol) driveClipChain(chain, c, p, t);
-      else el.volume = clamp(clipAudioGain(p), 0, 1);
+      const pp = how === "mute" ? { ...p, volume: 0 } : p;
+      if (chain?.vol) driveClipChain(chain, c, pp, t);
+      else el.volume = clamp(clipAudioGain(pp), 0, 1);
     } else {
       if (!el.paused) el.pause();
       muteClipChain(runtime.clipGain.get(c.id));
@@ -17694,6 +17732,7 @@ function xsApply(dest, q) {
 const FAST_X_REALTIME = 5;            // the hardware encoder's pace at 1080p60 on the measured laptop (22 Nov 2026)
 function fastRenderChoice() {
   const cur = xsCurrent(), frame = "Method: frame by frame";
+  if ($("xsSmoothRow")) $("xsSmoothRow").hidden = true;      // shown again below when the fast render has slowed pieces
   if (!cur.dest || !cur.q) return { fast: false, text: `${frame} (custom settings).` };
   if ($("forceFrames") && $("forceFrames").checked) return { fast: false, text: `${frame} (you chose that under Advanced).` };
   const p = Delivery.PRESETS[cur.dest] || {};
@@ -17704,14 +17743,22 @@ function fastRenderChoice() {
   const plan = CutsOnly.plan(project, DEFAULT_PROPS, whole ? {} : { range: { start: r.start, end: r.start + r.dur } });
   const d = CutsOnly.describe(plan, inCreateSummat());
   if (!d.fast) return { fast: false, text: d.text, plan };
-  const minutes = Math.max(1, Math.round(plan.duration / FAST_X_REALTIME * Math.pow(cur.q / 1080, 1.2) / 60));
-  return { fast: true, plan, q: cur.q, minutes, text: `${d.text} About ${minutes} min.` };
+  const smoothBox = $("xsSmooth"), slowed = CutsOnly.slowedSeconds(plan);
+  if ($("xsSmoothRow")) $("xsSmoothRow").hidden = !(slowed > 0);
+  const smooth = !!(smoothBox && smoothBox.checked && slowed > 0);
+  const extra = smooth ? CutsOnly.smoothExtraSeconds(plan, projectFps(), cur.q) : 0;
+  const minutes = Math.max(1, Math.round((plan.duration / FAST_X_REALTIME * Math.pow(cur.q / 1080, 1.2) + extra) / 60));
+  if ($("xsSmoothCost")) $("xsSmoothCost").textContent = slowed > 0
+    ? `${fmtSlowed(slowed)} of slowed footage: about ${Math.max(1, Math.round(CutsOnly.smoothExtraSeconds(plan, projectFps(), cur.q) / 60))} min extra to make.` : "";
+  return { fast: true, plan, q: cur.q, minutes, smooth, text: `${d.text} About ${minutes} min${smooth ? ` (smooth slow-mo included)` : ""}.` };
 }
+function fmtSlowed(s) { return s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`; }
 /** Hand the cuts to Create Summat: it renders them on its Queue, into this editor's exports folder. */
 function sendFastExport(choice) {
   const fps = projectFps(), box = $("sendRtp");
   hostWindow().postMessage({ source: "fablecut", type: "fast-export", project: project.name || "",
-    pieces: choice.plan.pieces.map((p) => ({ file: p.file, in: p.in, out: p.out })), fps, height: choice.q,
+    pieces: choice.plan.pieces.map((p) => ({ file: p.file, in: p.in, out: p.out, speed: p.speed || 1, sound: p.sound || "normal" })),
+    fps, height: choice.q, smooth: !!choice.smooth,
     name: deliveryFileName(dlvSpec, fps), send: !!(box && box.checked) }, "*");
   toast(`Create Summat is rendering this the fast way (about ${choice.minutes} min): watch the bar at the top of the window, or its Queue page`);
 }
@@ -17880,7 +17927,10 @@ async function renderAudioMix(t0, t1) {
     if (c.kind !== "audio" && c.kind !== "video") continue;
     if (!clipRenders(c)) continue;
     const m = getMedia(c.mediaId); if (!m) continue;
-    jobs.push(getAudioBuffer(m).then((buf) => ({ c, buf })).catch(() => null));
+    if (speedChanged(c) && clipSpeedSound(c) === "mute") continue;        // silent while its speed is changed
+    const stretch = !hasSpeedRamp(c) && speedChanged(c) && clipSpeedSound(c) === "normal" && state.connected && /^\/(media|library)\//.test(m.src);
+    jobs.push((stretch ? getStretchBuffer(m, c).then((buf) => ({ c, buf, stretched: true }), () => getAudioBuffer(m).then((buf) => ({ c, buf })))
+      : getAudioBuffer(m).then((buf) => ({ c, buf }))).catch(() => null));
   }
   const sources = (await Promise.all(jobs)).filter(Boolean);
   if (!sources.length) return null;
@@ -17894,7 +17944,7 @@ async function renderAudioMix(t0, t1) {
   mix.masterOut.connect(off.destination);
   let scheduled = false;
   const exportChains = [];
-  for (const { c, buf } of sources) {
+  for (const { c, buf, stretched } of sources) {
     const a = Math.max(c.start, t0), b = Math.min(c.start + c.duration, t1);
     if (b - a <= 1e-6) continue;
     const mixWhen = Math.max(0, a - t0);
@@ -17927,6 +17977,8 @@ async function renderAudioMix(t0, t1) {
       src.playbackRate.setValueCurveAtTime(rc, mixWhen, Math.max(0.01, mixDur));
       src.start(mixWhen, Math.max(0, mediaTimeAt(c, a)));
       src.stop(mixWhen + mixDur);
+    } else if (stretched) {                // already at the clip's speed, pitch kept: its buffer starts at the clip's start
+      src.start(mixWhen, Math.max(0, local0), mixDur);
     } else {
       const sp = clipSpeed(c);
       src.playbackRate.value = sp;
@@ -19025,6 +19077,7 @@ $("btnCancelExport").addEventListener("click", () => {
 });
 $("btnPlay").addEventListener("click", toggleTransportPlay);
 els.btnSpeed.addEventListener("click", () => cyclePreviewRate(1));
+$("xsSmooth")?.addEventListener("change", () => { try { xsRender(); } catch {} });
 $("btnHome").addEventListener("click", gotoTransportHome);
 $("btnEnd").addEventListener("click", gotoTransportEnd);
 $("btnBack").addEventListener("click", () => stepTransport(-1));

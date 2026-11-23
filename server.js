@@ -793,6 +793,12 @@ const server = http.createServer(async (req, res) => {
     peaks.streamAudio(url.searchParams.get("src") || "", res);
     return;
   }
+  /* API: ?src=&from=&len=&speed= — that stretch of the file's sound at that speed, pitch kept (WAV). */
+  if (p === "/api/audio/stretch" && req.method === "GET") {
+    const q = url.searchParams;
+    peaks.streamStretch(q.get("src") || "", +q.get("from"), +q.get("len"), +q.get("speed"), res);
+    return;
+  }
 
   /* API: where might a missing file be now? Body {media:[{id, name, size?}]} →
      {candidates:{id:[{src, name, size, score, why}]}} — files under media/ and
