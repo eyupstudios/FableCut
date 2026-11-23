@@ -1498,6 +1498,7 @@ function applyProject(data, opts = {}) {
     clips: data.clips || [],
     markers: normalizeMarkers(data.markers),
     shortBoxes: typeof ShortBoxes !== "undefined" ? ShortBoxes.normalize(data.shortBoxes) : (Array.isArray(data.shortBoxes) ? data.shortBoxes : []),
+    thumbFrame: data.thumbFrame != null && isFinite(+data.thumbFrame) && +data.thumbFrame >= 0 ? +data.thumbFrame : null,
     inPoint: wa.inPoint,
     outPoint: wa.outPoint,
     exportFrame: normalizeExportFrame(data.exportFrame, data.width || 1280, data.height || 720),
@@ -1661,6 +1662,7 @@ function projectJSONHere() {
     clips: clips.map(serializeClip),
     markers: normalizeMarkers(markers),
     ...(project.shortBoxes && project.shortBoxes.length ? { shortBoxes: project.shortBoxes } : {}),
+    ...(project.thumbFrame != null ? { thumbFrame: project.thumbFrame } : {}),
     inPoint: inPoint == null ? null : inPoint,
     outPoint: outPoint == null ? null : outPoint,
     disabledTracks: normalizeDisabledTracks(disabledTracks),
@@ -5333,6 +5335,7 @@ function rebuildClips() {
   paintSilences();
   paintBeats();
   if (typeof paintShortBoxes === "function") paintShortBoxes();   // Short boxes (short-boxes.js, 23 Nov)
+  paintThumbMark();                                                 // the thumbnail frame marker (23 Nov)
   state.dirtyTimeline = false;
   updateWorkArea();
 }
@@ -17894,8 +17897,9 @@ function sendFastExport(choice) {
   hostWindow().postMessage({ source: "fablecut", type: "fast-export", project: project.name || "",
     pieces: choice.plan.pieces.map((p) => ({ file: p.file, in: p.in, out: p.out, speed: p.speed || 1, sound: p.sound || "normal" })),
     fps, height: choice.q, smooth: !!choice.smooth,
-    name: deliveryFileName(dlvSpec, fps), send: true, copy_to: copy }, "*");
-  toast(`Create Summat is rendering this the fast way (about ${choice.minutes} min): watch the bar at the top of the window, or its Queue page`);
+    name: deliveryFileName(dlvSpec, fps), send: !copy, download: !!copy, copy_to: copy, thumb_at: thumbAtInExport(fps) }, "*");
+  toast(copy ? `Create Summat is making this (about ${choice.minutes} min), then saving it in ${copy}. Keep editing.`
+    : `Create Summat is rendering this the fast way (about ${choice.minutes} min): watch the bar at the top of the window, or its Queue page`);
 }
 /** Seconds one frame took on this PC at each quality, learned from finished exports (setting "exportPace"). */
 function exportPaceRecord(frames, q) {
@@ -17962,7 +17966,7 @@ function exportStatus(frac) {
   if (!el || !exportClock) return;
   const dt = (performance.now() - exportClock.t0) / 1000;
   const left = frac >= 0.005 && dt >= 4 ? exportTimeLeft(dt * (1 - frac) / frac) : "working out the time left…";
-  const rtp = inCreateSummat() ? `, then to Ready to post${pendingDownload ? ` and a copy to ${pendingDownload.folder}` : ""}` : "";
+  const rtp = inCreateSummat() ? (pendingDownload ? `, then saved in ${pendingDownload.folder}` : ", then to Ready to post") : "";
   el.textContent = left + (exportClock.where ? ` · the file goes to ${exportClock.where}${rtp}` : "");
   exportTell("running", frac, { stage: "drawn frame by frame in the Editor" });
 }
@@ -18029,7 +18033,7 @@ function updateExportWhere() {
   if (!inCreateSummat()) { el.textContent = "Export: the video is saved in the editor's exports folder and your browser downloads it."; return; }
   const ex = editorExportsFolder || "the Editor's exports folder", last = getSetting("downloadFolder");
   el.innerHTML = `<b>Export to Ready to post:</b> the video is saved in ${escapeHtml(ex)}, it shows in Create Summat's Library, and it gets a Ready to post page (titles, description, chapters, tags, thumbnail).<br>`
-    + `<b>Download:</b> all of that, plus a copy in ${last ? escapeHtml(last) : "a folder you choose"} (you can pick the folder when you click it).<br>`
+    + `<b>Download:</b> just the file, saved in ${last ? escapeHtml(last) : "a folder you choose"} (you pick the folder when you click it). No Ready to post page; it shows in the Library under "Downloaded from the Editor".<br>`
     + `<b>Add to queue:</b> waits on the export queue until you press Start there.`;
   if (!editorExportsFolder) askHost("where", {}, 5000).then((r) => { if (r && r.exports) { editorExportsFolder = r.exports; updateExportWhere(); } });
 }
@@ -18045,14 +18049,49 @@ async function downloadExport() {
   updateExportWhere();
   startChosenExport();
 }
+/* "Mark thumbnail frame" (Steve, 23 Nov): a marker on the timeline; that exact frame becomes the video's thumbnail on
+   its Ready to post page (none marked: the five automatic picks). One per project; click again on it to take it off. */
+function markThumbFrame() {
+  const t = Math.max(0, +state.time || 0);
+  pushUndo();
+  if (project.thumbFrame != null && Math.abs(project.thumbFrame - t) < 0.5 / (projectFps() || 30)) {
+    project.thumbFrame = null; scheduleSave(); paintThumbMark(); toast("Thumbnail frame taken off: the automatic picks will be used"); return;
+  }
+  project.thumbFrame = Math.round(t * 1000) / 1000;
+  scheduleSave(); paintThumbMark();
+  toast(`Thumbnail frame marked at ${fmt(t)}: this exact frame is the thumbnail when you export`);
+}
+function paintThumbMark() {
+  const host = els && els.tracksContent;
+  if (!host) return;
+  host.querySelectorAll(".thumb-mark").forEach((x) => x.remove());
+  const btn = $("btnThumbFrame");
+  if (btn) btn.classList.toggle("on", project.thumbFrame != null);
+  if (project.thumbFrame == null) return;
+  const el = document.createElement("div");
+  el.className = "thumb-mark";
+  el.style.left = project.thumbFrame * state.pps + "px";
+  el.title = `Thumbnail frame (${fmt(project.thumbFrame)}): this exact frame is the thumbnail. Click the flag to go there.`;
+  el.innerHTML = `<span class="tm-flag">Thumbnail</span><button type="button" class="tm-del" aria-label="Take the thumbnail frame off">✕</button>`;
+  host.appendChild(el);
+  el.querySelector(".tm-flag").onclick = (e) => { e.stopPropagation(); setTime(project.thumbFrame); };
+  el.querySelector(".tm-del").onclick = (e) => { e.stopPropagation(); pushUndo(); project.thumbFrame = null; scheduleSave(); paintThumbMark(); };
+}
+/** The marked frame in the exported file's own time (an IN-OUT export starts later); null = none, or outside it. */
+function thumbAtInExport(fps) {
+  if (project.thumbFrame == null) return null;
+  const r = exportRange(fps);
+  const t = project.thumbFrame - (r.start || 0);
+  return t >= 0 && t <= (r.dur || projDur()) ? Math.round(t * 1000) / 1000 : null;
+}
 function sendToReadyToPost(src) {
   try {
     if (!src || !inCreateSummat()) return false;
     const copy = pendingDownload && pendingDownload.folder;
     pendingDownload = null;
     hostWindow().postMessage({ source: "fablecut", type: "exported", project: project.name || "",
-      file: decodeURIComponent(String(src).split("/").pop()), copy_to: copy || "" }, "*");
-    toast(`Sent to Ready to post: Create Summat is writing its page${copy ? ` and saving a copy in ${copy}` : ""}`);
+      file: decodeURIComponent(String(src).split("/").pop()), copy_to: copy || "", download: !!copy, thumb_at: thumbAtInExport() }, "*");
+    toast(copy ? `Saving it in ${copy}` : "Sent to Ready to post: Create Summat is writing its page");
     return true;
   } catch { return false; }
 }
@@ -19462,6 +19501,8 @@ els.btnSnap.addEventListener("click", () => {
 els.btnSnapMenu.addEventListener("click", () => openSnapMenu(els.btnSnap));
 els.btnMarkers.addEventListener("click", () => openMarkerList(els.btnMarkers));
 if ($("btnAddShort")) $("btnAddShort").addEventListener("click", () => addShortBox());   // Short boxes (23 Nov)
+if ($("btnExportShorts")) $("btnExportShorts").addEventListener("click", () => exportAllShorts());   // all of them at once
+if ($("btnThumbFrame")) $("btnThumbFrame").addEventListener("click", () => markThumbFrame());       // thumbnail frame (23 Nov)
 if (els.btnAudioHold) {
   els.btnAudioHold.addEventListener("click", () => setAudioHold(!state.audioHold));
 }
