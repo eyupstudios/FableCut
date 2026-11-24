@@ -4799,3 +4799,7 @@ body.track-size-s .join-btn { width: 14px; height: 14px; margin: -7px 0 0 -7px; 
 @keyframes txBounce { 0%, 10% { transform: translateY(-50px); } 25% { transform: none; } 32% { transform: translateY(-12px); } 40%, 100% { transform: none; } }
 @keyframes txFade { 0%, 10% { opacity: 0; } 40%, 80% { opacity: 1; } 100% { opacity: 0; } }
 @keyframes txType { 0%, 10% { clip-path: inset(0 100% 0 0); } 60%, 100% { clip-path: inset(0 0 0 0); } }
+/* 24 Nov: with Stickers, Text and Transitions the tab row wraps instead of cutting the last tab off */
+.bin-tabs { flex-wrap: wrap; row-gap: 2px; }
+.xf-head .bin-search, .xf-head input[type=number] { background: var(--bg-2, #0b1730); color: inherit; border: 1px solid var(--line, #2a3a5a); border-radius: 6px; padding: 4px 8px; }
+.xf-head .bin-search { width: 100%; }
