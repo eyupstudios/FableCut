@@ -3443,8 +3443,9 @@ function renderLibrary() {
       e.dataTransfer.setData("text/fablecut-media", m.id);
       e.dataTransfer.effectAllowed = "copy";
     });
-    item.addEventListener("dblclick", () => addLibraryItem(f, null, state.time));
-    item.querySelector(".lib-add").addEventListener("click", () => addLibraryItem(f, null, state.time));
+    const add = () => (dir === "sfx" && kind === "audio" ? addSfx(f) : addLibraryItem(f, null, state.time));   // 24 Nov: a free sound track
+    item.addEventListener("dblclick", add);
+    item.querySelector(".lib-add").addEventListener("click", add);
     const play = item.querySelector(".lib-play");
     if (play) play.addEventListener("click", () => toggleSfxPreview(f, play));
     els.libList.appendChild(item);
@@ -15150,6 +15151,20 @@ function placeSticker(m) {
   state.dirtyTimeline = true; scheduleSave(); renderInspector();
   toast(`${m.name.replace(/\.[^.]+$/, "")}: drag it on the picture, a corner resizes it, the knob turns it`);
 }
+/** A sound effect's track (24 Nov): the first sound track with nothing on it for its length - never on top of the
+ *  recording's own sound; a new track when every one is busy. */
+function sfxTrack(t, dur) {
+  const free = (id) => !isTrackLocked(id) && !project.clips.some((c) => c.track === id && c.start < t + dur && c.start + c.duration > t);
+  let id = audioTrackIds().find(free);
+  if (!id && ensureAudioTrackCount(audioTrackIds().length + 1)) id = audioTrackIds().find(free);
+  return id || null;
+}
+async function addSfx(f) {
+  const m = mediaForLibraryItem(f);
+  if (!m) return;
+  if (m.duration == null || isNaN(m.duration)) { try { await loadMediaMetadata(m); } catch { } ensureWave(m); }
+  addClipFromMedia(m, sfxTrack(state.time, m.duration || 1), state.time);
+}
 /** "Add my own image / sound": the file is imported into the project, then put at the playhead. */
 async function addOwnFile(fileList, kind) {
   const files = [...(fileList || [])];
@@ -15157,7 +15172,7 @@ async function addOwnFile(fileList, kind) {
   const added = await importFiles(files);
   for (const m of added || []) {
     if (m.kind === "image" && kind === "image") placeSticker(m);
-    else if (m.kind === "audio" && kind === "audio") addClipFromMedia(m, null, state.time);
+    else if (m.kind === "audio" && kind === "audio") addClipFromMedia(m, sfxTrack(state.time, m.duration || 1), state.time);
   }
 }
 function renderShapesTab() {

@@ -51,7 +51,7 @@ test("the editor wires it: Text presets in the Brand kit, Stickers with your own
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
   for (const t of ['data-tab="text"', 'data-tab="stickers"']) assert.ok(html.includes(t), t);
   for (const s of ["TEXT_PRESETS", "askHost(\"brand-request\"", "function renderStickersTab", "Add my own image", "Add my own sound",
-    "case \"bounce\":", "function bounceOut", "function rasterOverlay", "overlays, sounds: choice.plan.sounds"])
+    "case \"bounce\":", "function sfxTrack", "function bounceOut", "function rasterOverlay", "overlays, sounds: choice.plan.sounds"])
     assert.ok(app.includes(s), s);
   for (const id of ["pop", "slide", "typewriter", "bounce", "fade"]) assert.ok(app.includes(`id: "${id}"`), id);
   const paths = fs.readFileSync(path.join(__dirname, "..", "paths.js"), "utf8");
