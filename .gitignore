@@ -11,6 +11,7 @@ exports/*
 library/sfx/*
 !library/sfx/.gitkeep
 !library/sfx/README.md
+!library/sfx/createsummat/
 
 # Local scratch / notes
 out/
