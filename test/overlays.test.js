@@ -60,5 +60,10 @@ test("the editor wires it: Text presets in the Brand kit, Stickers with your own
   assert.ok(stickers.filter((f) => f.endsWith(".png")).length >= 120 && stickers.includes("LICENSE.txt"));
   assert.match(fs.readFileSync(path.join(__dirname, "..", "library", "stickers", "fluent-emoji", "LICENSE.txt"), "utf8"), /MIT License/);
   const sfx = fs.readdirSync(path.join(__dirname, "..", "library", "sfx", "createsummat"));
-  for (const s of ["whoosh.mp3", "hit.mp3", "ding.mp3", "record-scratch.mp3", "crowd-cheer.mp3", "fail-trombone.mp3", "LICENSE.txt"]) assert.ok(sfx.includes(s), s);
+  for (const s of ["whoosh.mp3", "hit.mp3", "ding.mp3", "record-scratch.mp3", "fail-trombone.mp3", "LICENSE.txt"]) assert.ok(sfx.includes(s), s);
+  // 24 Nov (Steve): the crowd cheer is a real CC0 recording (BigSoundBank), its source on Credits; the synthetic one is gone
+  const rec = fs.readdirSync(path.join(__dirname, "..", "library", "sfx", "recorded"));
+  assert.ok(rec.includes("crowd-cheer.mp3") && !sfx.includes("crowd-cheer.mp3"));
+  const lic = fs.readFileSync(path.join(__dirname, "..", "library", "sfx", "recorded", "LICENSE.txt"), "utf8");
+  assert.ok(lic.includes("CC0 1.0") && lic.includes("bigsoundbank.com/applause-concert-bar-1-s2479.html"));
 });

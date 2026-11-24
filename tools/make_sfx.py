@@ -1,7 +1,7 @@
 """Create Summat's own sound effects (24 Nov), made from scratch here - synthesised, not recorded or copied - and given
 away as CC0 (library/sfx/createsummat/LICENSE.txt). Run: python tools/make_sfx.py  (needs numpy + ffmpeg).
 
-whoosh, whoosh-fast, hit, punch, boom, ding, ding-double, record-scratch, crowd-cheer, crowd-ooh, fail-trombone
+whoosh, whoosh-fast, hit, punch, boom, ding, ding-double, record-scratch, crowd-ooh (crowd-cheer: a real CC0 recording, library/sfx/recorded), fail-trombone
 ("bruh"-style sad horn), pop, click, riser, glitch."""
 import subprocess
 import sys
@@ -176,7 +176,8 @@ def glitch():
 
 
 SOUNDS = {"whoosh": lambda: whoosh(), "whoosh-fast": lambda: whoosh(0.45, 500, 6000), "hit": hit, "punch": punch, "boom": boom,
-          "ding": ding, "ding-double": ding_double, "record-scratch": record_scratch, "crowd-cheer": lambda: crowd(),
+          "ding": ding, "ding-double": ding_double, "record-scratch": record_scratch, # "crowd-cheer": a real CC0 recording since 24 Nov (library/sfx/recorded)
+          
           "crowd-ooh": lambda: crowd(2.4, cheer=False), "fail-trombone": fail_trombone, "pop": pop, "click": click,
           "riser": lambda: riser(), "glitch": glitch}
 

@@ -1,0 +1,8 @@
+Recorded sound effects, from other people, each one CC0 1.0 Universal (public domain dedication):
+https://creativecommons.org/publicdomain/zero/1.0/  - use in any video, commercial included, no credit required.
+
+crowd-cheer.mp3  "Applause Concert Bar #1" - BigSoundBank (bigsoundbank.com), sound s2479
+                 https://bigsoundbank.com/applause-concert-bar-1-s2479.html
+                 Licence: CC0 1.0 (bigsoundbank.com/licenses.html: "Use, including for commercial purposes.
+                 Without any restrictions. Without asking permission.")
+                 Changes: converted to MP3 192 kbps, loudness evened to -16 LUFS. Downloaded 24 Nov 2026.
