@@ -3447,7 +3447,9 @@ function setBinTab(tab) {
   els.binList.classList.toggle("hidden", !isProj);
   els.libList.classList.toggle("hidden", isProj);
   if (els.binTools) els.binTools.classList.toggle("hidden", !isProj);
+  if (tab !== "transitions") stopXfPreviews();
   if (tab === "shapes") renderShapesTab();
+  else if (tab === "transitions") renderTransitionsTab();
   else if (tab === "templates") { renderTemplatesTab(); fetchSaved("templates").then(() => { if (state.binTab === "templates") renderTemplatesTab(); }); }
   else if (!isProj) fetchLibrary(tab).then(renderLibrary);
 }
@@ -5528,6 +5530,22 @@ function volBandHtml(c, trackH) {
    white, a length); the corner grips of a video clip drag its Fade in / Fade out (picture and sound together); the
    Inspector has Fade in / Fade out. The fast renderer makes them all (ffmpeg fade / xfade, the sound faded too). */
 const FADES = typeof FableCutFades !== "undefined" ? FableCutFades : null;
+/* 24 Nov: transitions (xfades.js) - a cross fade join with a style. XF_OUT: this frame's outgoing clips -> their
+   join's {style, P} (set in drawFrame); XF_BAND: the band of a smooth wipe being drawn. */
+const XF = typeof FableCutXfades !== "undefined" ? FableCutXfades : null;
+let XF_OUT = new Map(), XF_BAND = null;
+const xfStyled = (tr) => !!(XF && tr && tr.type === "cross" && tr.style && tr.style !== "fade" && XF.IDS.includes(tr.style));
+/** Which clips are the picture BEFORE a styled join at time t (the clip after carries the style). */
+function xfOutgoing(clips, t) {
+  const out = new Map();
+  for (const n of clips) {
+    const tin = n.transitionIn;
+    if (!xfStyled(tin) || t < n.start || t >= n.start + tin.duration) continue;
+    const a = clips.find((c) => c !== n && c.track === n.track && c.start < n.start && c.start + c.duration > t);
+    if (a) out.set(a, { style: tin.style, P: (t - n.start) / tin.duration });
+  }
+  return out;
+}
 const JOIN_TIPS = {
   none: "A plain cut: the next clip starts straight away",
   "dip-black": "The picture fades out to black, then the next clip fades in from black. The sound fades out and back in with it",
@@ -5584,6 +5602,8 @@ function showJoinMenu(anchor, a, b) {
   menu.id = "trackCtxMenu";
   menu.innerHTML = `<div class="join-menu-title">Transition</div>` +
     FADES.JOINS.map(([v, l]) => `<label class="join-opt" data-tip="${escapeHtml(JOIN_TIPS[v])}"><input type="radio" name="joinType" value="${v}" ${v === cur.type ? "checked" : ""}> ${l}</label>`).join("") +
+    (XF ? `<label class="join-style" data-tip="How the next clip comes in (a Cross fade). Each one exports with the fast renderer.">Style
+      <select data-join-style>${XF.STYLES.map(([v, l]) => `<option value="${v}" ${v === (cur.style || "fade") ? "selected" : ""}>${l}</option>`).join("")}</select></label>` : "") +
     `<label class="join-len" data-tip="How long the whole transition takes, in seconds (a dip is half out, half in)">Length
       <input type="number" data-join-len min="0.1" max="10" step="0.1" value="${cur.type === "none" ? FADES.DEFAULT_LENGTH : cur.length}"> s</label>
      <div class="join-btns"><button type="button" class="btn tiny" data-join-apply data-tip="Put this transition on the join">Apply</button></div>`;
@@ -5597,25 +5617,28 @@ function showJoinMenu(anchor, a, b) {
   const apply = () => {
     const type = menu.querySelector("input[name=joinType]:checked")?.value || "none";
     const len = parseFloat(menu.querySelector("[data-join-len]").value) || FADES.DEFAULT_LENGTH;
+    const style = menu.querySelector("[data-join-style]")?.value;
     hideTrackCtxMenu();
-    applyJoin(a, b, type, len);
+    applyJoin(a, b, style && style !== "fade" && type !== "none" && !FADES.DIPS.includes(type) ? "cross" : type, len, style);
   };
   menu.querySelector("[data-join-apply]").addEventListener("click", apply);
   menu.querySelector("[data-join-len]").addEventListener("keydown", (e) => { if (e.key === "Enter") apply(); });
   menu.querySelectorAll("input[name=joinType]").forEach((r) => r.addEventListener("change", apply));
+  menu.querySelector("[data-join-style]")?.addEventListener("change", () => {
+    const x = menu.querySelector('input[name=joinType][value="cross"]'); if (x) x.checked = true; apply(); });
 }
-function applyJoin(a, b, type, len) {
+function applyJoin(a, b, type, len, style) {
   if (isGroupLocked(a) || isGroupLocked(b)) { toastLocked(); return; }
   const touched = [...withLinked([a]), ...withLinked([b])];
   const saved = touched.map((x) => [x, JSON.parse(JSON.stringify(x))]);
   pushUndo();
-  const why = FADES.setJoin(a, b, type, len, fadeHelpers());
+  const why = FADES.setJoin(a, b, type, len, fadeHelpers(), style);
   if (why) {                                   // put everything back as it was
     for (const [x, s] of saved) { for (const k of Object.keys(x)) if (!(k in s)) delete x[k]; Object.assign(x, s); }
     runtime.undo.pop();
     toast(`No cross fade here: ${why}. Try a shorter length or a dip.`);
   } else {
-    const name = (FADES.JOINS.find((x) => x[0] === type) || [])[1];
+    const name = type === "cross" && style && style !== "fade" && XF ? XF.label(style) : (FADES.JOINS.find((x) => x[0] === type) || [])[1];
     toast(type === "none" ? "Transition taken off" : `${name}, ${FADES.joinOf(a, b).length} s`);
   }
   state.dirtyTimeline = true;
@@ -6868,7 +6891,7 @@ function updateWorkArea() {
 
 /* ── Drag & drop: bin → timeline, files → window ── */
 els.timelineScroll.addEventListener("dragover", (e) => {
-  if (["text/fablecut-media", "text/fablecut-comp", "text/fablecut-template"].some((t) => e.dataTransfer.types.includes(t))) {
+  if (["text/fablecut-media", "text/fablecut-comp", "text/fablecut-template", "text/fablecut-xfade"].some((t) => e.dataTransfer.types.includes(t))) {
     e.preventDefault();
     e.dataTransfer.dropEffect = "copy";
     for (const row of els.tracks.children)
@@ -6880,6 +6903,8 @@ els.timelineScroll.addEventListener("dragleave", () => {
 });
 els.timelineScroll.addEventListener("drop", (e) => {
   for (const row of els.tracks.children) row.classList.remove("drop-hint");
+  const xf = e.dataTransfer.getData("text/fablecut-xfade");
+  if (xf) { e.preventDefault(); xfOnNearestJoin(xf, trackAtEvent(e), timeAtEvent(e)); return; }
   const cid = e.dataTransfer.getData("text/fablecut-comp");
   if (cid) { e.preventDefault(); const comp = getComp(cid); if (comp) addCompClip(comp, trackAtEvent(e), snapTime(timeAtEvent(e), null)); return; }
   const tid = e.dataTransfer.getData("text/fablecut-template");
@@ -11507,8 +11532,11 @@ function evalProps(c, t) {
   const tin = c.transitionIn, tout = c.transitionOut;
   if (tin && tin.duration > 0 && local < tin.duration) {
     const u = clamp(local / tin.duration, 0, 1);
-    applyTransition(p, tin.type, STRAIGHT_FADES.has(tin.type) ? 1 - u : 1 - EASE["ease-out"](u), W, H, -1, audioFadeGain(tin.curve, u));
+    if (xfStyled(tin)) xfApply(p, tin.style, u, "in", W, H);
+    else applyTransition(p, tin.type, STRAIGHT_FADES.has(tin.type) ? 1 - u : 1 - EASE["ease-out"](u), W, H, -1, audioFadeGain(tin.curve, u));
   }
+  const xo = XF_OUT.get(c);
+  if (xo) xfApply(p, xo.style, xo.P, "out", W, H);
   if (tout && tout.duration > 0 && local > c.duration - tout.duration) {
     const u = clamp((local - (c.duration - tout.duration)) / tout.duration, 0, 1);
     applyTransition(p, tout.type, STRAIGHT_FADES.has(tout.type) ? u : EASE["ease-in"](u), W, H, 1, audioFadeGain(tout.curve, 1 - u));
@@ -11519,6 +11547,17 @@ function evalProps(c, t) {
    sound fades out and in with it) and Cross fade. They run in a straight line, exactly as ffmpeg's fade / xfade /
    afade do, so the fast renderer's export matches the preview frame for frame. */
 const STRAIGHT_FADES = new Set(["dip-black", "dip-white", "cross"]);
+/** A transition's effect on one picture (xfades.js), as props the compositor draws. */
+function xfApply(p, style, P, role, W, H) {
+  const e = XF.effect(style, P, role, W, H);
+  p.opacity *= e.alpha;
+  p.x = (+p.x || 0) + e.dx; p.y = (+p.y || 0) + e.dy;
+  p.scale = (+p.scale || 1) * e.scale;
+  if (e.blur > 0) p.blur = (+p.blur || 0) + e.blur;
+  if (e.dip > 0) { p._dip = Math.max(+p._dip || 0, e.dip); p._dipColor = e.dipColor; }
+  if (e.clip) p._xfClip = e.clip;
+  if (e.pixel > 1) p._xfPixel = e.pixel;
+}
 const DIP_COLOR = { "dip-black": "#000000", "dip-white": "#ffffff" };
 /* Audio fade shapes. `u` runs 0 (silent edge) → 1 (full level). A fade with
    no `curve` keeps the original eased shape (applyTransition's 1 − k), so
@@ -12290,6 +12329,7 @@ function drawFrame(t = state.time) {
   // render video tracks bottom-up (V1 under V2)
   if (runtime.maskView) runtime.maskView.ready = false;
   const clips = visibleClipsAt(t), mattes = matteTracksAt(clips);
+  XF_OUT = xfOutgoing(clips, t);
   for (const c of clips) if (!mattes.has(c.track)) drawClip(c, W, H, t);   // a matte track only cuts
   if (!state.exporting && !runtime.sampling) drawMaskView(W, H);
   if (!runtime.sampling) updateScopes(); // before the handles, so they never reach the scopes
@@ -13470,8 +13510,18 @@ function drawClipPicture(c, W, H, t, layered) {
     return { p, geom: noteMaskGeom(c, new DOMMatrix(), 0, 0, W, H) };
   }
   const p = evalProps(c, t);
+  if (p._xfClip && p._xfClip.kind === "soft" && !XF_BAND) {          // a smooth wipe: the soft edge in bands
+    let r = { p, geom: null };
+    for (const band of XF.softBands(p._xfClip.dir, p._xfClip.k, W, H)) {
+      XF_BAND = band;
+      try { r = drawClipPicture(c, W, H, t, layered); } finally { XF_BAND = null; }
+    }
+    return r;
+  }
   let geom = null;
   ctx2d.save();
+  if (XF_BAND) { ctx2d.beginPath(); ctx2d.rect(XF_BAND.x, XF_BAND.y, XF_BAND.w, XF_BAND.h); ctx2d.clip(); p.opacity *= XF_BAND.alpha; }
+  else if (p._xfClip) XF.path(ctx2d, p._xfClip, W, H);
   if (p._wipe) {
     ctx2d.beginPath();
     const k = p._wipe;
@@ -13579,6 +13629,12 @@ function drawClipPicture(c, W, H, t, layered) {
       ctx2d.drawImage(processed, 0, 0, processed.width, processed.height, -dw / 2, -dh / 2, dw, dh);
     } else if (captureGradeInput(c, [src, sx, sy, cw, ch, sw, sh, dw, dh]), grade && (graded = gradeSource(src, sx, sy, cw, ch, sw, sh, dw, dh, grade, matte))) {
       ctx2d.drawImage(graded, 0, 0, graded.width, graded.height, -dw / 2, -dh / 2, dw, dh);
+    } else if (p._xfPixel > 1) {                      // Pixelize: drawn small, then blown up without smoothing
+      const tw = Math.max(1, Math.round(dw / p._xfPixel)), th = Math.max(1, Math.round(dh / p._xfPixel));
+      const tmp = runtime.xfPix || (runtime.xfPix = document.createElement("canvas"));
+      tmp.width = tw; tmp.height = th; tmp.getContext("2d").drawImage(src, sx, sy, cw, ch, 0, 0, tw, th);
+      const sm = ctx2d.imageSmoothingEnabled; ctx2d.imageSmoothingEnabled = false;
+      ctx2d.drawImage(tmp, -dw / 2, -dh / 2, dw, dh); ctx2d.imageSmoothingEnabled = sm;
     } else {
       ctx2d.drawImage(src, sx, sy, cw, ch, -dw / 2, -dh / 2, dw, dh);
     }
@@ -14913,6 +14969,66 @@ const SHAPE_ICONS = {
   pen: '<path d="M4 18 C 8 4, 16 4, 20 16" fill="none" stroke="#5ad1ff" stroke-width="2.5" stroke-linecap="round"/><rect x="2.5" y="16.5" width="3" height="3" fill="#fff"/><rect x="18.5" y="14.5" width="3" height="3" fill="#fff"/>',
   null: '<rect x="5" y="5" width="14" height="14" fill="none" stroke="#ff6b6b" stroke-width="2"/><path d="M12 8v8M8 12h8" stroke="#ff6b6b" stroke-width="2"/>',
 };
+/* ── Transitions (24 Nov): each with a small moving preview, drawn by the same code as the monitor (xfades.js). Drag
+   one onto a join between two clips, or click it: it goes on the join nearest the playhead (the selected clip's
+   track first). Length in seconds above the list. ── */
+let xfRaf = 0;
+function stopXfPreviews() { cancelAnimationFrame(xfRaf); xfRaf = 0; }
+function xfSamples() {
+  if (runtime.xfSamples) return runtime.xfSamples;
+  const mk = (c1, c2, letter) => { const cv = document.createElement("canvas"); cv.width = 160; cv.height = 90;
+    const g = cv.getContext("2d"), gr = g.createLinearGradient(0, 0, 160, 90); gr.addColorStop(0, c1); gr.addColorStop(1, c2);
+    g.fillStyle = gr; g.fillRect(0, 0, 160, 90); g.fillStyle = "rgba(255,255,255,.9)"; g.font = "700 44px Segoe UI, sans-serif";
+    g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(letter, 80, 47); return cv; };
+  return (runtime.xfSamples = [mk("#ff8a3d", "#b8401a", "A"), mk("#3d8bff", "#1a3fb8", "B")]);
+}
+function renderTransitionsTab() {
+  if (!XF || !FADES) { els.libList.innerHTML = `<div class="bin-empty">Transitions are not available</div>`; return; }
+  const len = runtime.xfLen || 1;
+  els.libList.innerHTML = `<div class="xf-head"><label data-tip="How long each transition takes when you put it on a join">Length <input type="number" id="xfLen" min="0.1" max="10" step="0.1" value="${len}"> s</label>
+    <span class="bin-sub">Drag onto a join, or click: the join nearest the playhead</span></div><div class="xf-grid" id="xfGrid"></div>`;
+  $("xfLen").addEventListener("change", (e) => { runtime.xfLen = clamp(parseFloat(e.target.value) || 1, 0.1, 10); });
+  const grid = $("xfGrid"), tiles = [];
+  for (const [id, label, group] of XF.STYLES) {
+    const t = document.createElement("div");
+    t.className = "xf-tile"; t.draggable = true; t.dataset.xf = id;
+    t.setAttribute("data-tip", `${label} (${group.toLowerCase()}): drag onto a join between two clips, or click to put it on the join nearest the playhead. Exports with the fast renderer.`);
+    t.innerHTML = `<canvas width="112" height="63"></canvas><span>${escapeHtml(label)}</span>`;
+    t.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/fablecut-xfade", id); e.dataTransfer.effectAllowed = "copy"; });
+    t.addEventListener("click", () => xfOnNearestJoin(id));
+    grid.appendChild(t); tiles.push([t.querySelector("canvas").getContext("2d"), id]);
+  }
+  const [A, B] = xfSamples(), t0 = performance.now();
+  stopXfPreviews();
+  const tick = (now) => {
+    if (state.binTab !== "transitions" || !grid.isConnected) { xfRaf = 0; return; }
+    const ph = ((now - t0) / 2200) % 1, P = clamp((ph - 0.15) / 0.6, 0, 1);       // hold A, transition, hold B
+    for (const [g, id] of tiles) XF.drawPair(g, A, B, id, P, 112, 63);
+    xfRaf = requestAnimationFrame(tick);
+  };
+  xfRaf = requestAnimationFrame(tick);
+}
+/** The join nearest time t on a track (the clip ending and the clip starting there), within `tol` seconds. */
+function xfJoinNear(track, t, tol) {
+  const lane = project.clips.filter((c) => c.track === track && !isStem(c)).sort((a, b) => a.start - b.start);
+  let best = null;
+  for (let i = 0; i + 1 < lane.length; i++) {
+    const a = lane[i], b = lane[i + 1], at = Math.min(a.start + a.duration, b.start + (b.transitionIn?.duration || 0));
+    if (b.start > a.start + a.duration + 1e-3) continue;                     // a gap: no join
+    const d = Math.abs(at - t);
+    if (d <= tol && (!best || d < best.d)) best = { a, b, d };
+  }
+  return best;
+}
+function xfOnNearestJoin(style, track, t) {
+  const sel = selectedClips()[0];
+  const tracks = track ? [track] : [...new Set([sel?.track, ...TRACKS.filter((x) => x.kind === "video").map((x) => x.id)].filter(Boolean))];
+  for (const tr of tracks) {
+    const j = xfJoinNear(tr, t ?? state.time, track ? 40 / Math.max(1, state.pps || 80) + 0.25 : 1e9);
+    if (j) return applyJoin(j.a, j.b, "cross", runtime.xfLen || 1, style);
+  }
+  toast("No join there: put a transition between two clips that touch on one track");
+}
 function renderShapesTab() {
   const rows = [
     ...Object.entries(SHAPE_PRESETS).map(([k, pre]) => ({ k, name: pre.label, sub: "Shape layer", run: () => addShapeLayer(k) })),

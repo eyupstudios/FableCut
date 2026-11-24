@@ -127,7 +127,7 @@
       const piece = { file: fileOf(m.src || m.name), in: c.in, out: c.in + c.duration * sp, at: c.start, speed: sp, sound };
       if (tin && tin.type !== "cross") { piece.fadeIn = +tin.duration; piece.fadeInColor = tin.type === "dip-white" ? "white" : "black"; }
       if (tout) { piece.fadeOut = +tout.duration; piece.fadeOutColor = tout.type === "dip-white" ? "white" : "black"; }
-      if (cross) piece.cross = cross;
+      if (cross) { piece.cross = cross; if (tin.style && tin.style !== "fade") piece.crossStyle = tin.style; }
       out.pieces.push(piece);
     }
     if (sounds.some((s) => !used.has(s))) no("there is other sound on the timeline (music, a voice-over, or sound moved off its picture)");

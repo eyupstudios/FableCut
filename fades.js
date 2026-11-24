@@ -60,7 +60,7 @@
   function joinOf(a, b) {
     const overlap = end(a) - b.start;
     if (overlap > EPS && b.transitionIn && ["cross", "fade", "dissolve"].includes(b.transitionIn.type))
-      return { type: "cross", length: r3(overlap) };
+      return { type: "cross", length: r3(overlap), ...(b.transitionIn.style ? { style: b.transitionIn.style } : {}) };
     const o = a.transitionOut, i = b.transitionIn;
     if (o && i && DIPS.includes(o.type) && o.type === i.type) return { type: o.type, length: r3(o.duration + i.duration) };
     if (i && DIPS.includes(i.type)) return { type: i.type, length: r3(i.duration * 2) };
@@ -71,7 +71,7 @@
   /** Set the join between a and b (the clips either side, on one track). h: the editor's own helpers —
    *  {withLinked(clips), crossfadeCut(a, b, seconds) -> null | why not, trimHead(clip, seconds), clipSpeed(clip)}.
    *  Returns null, or why it could not be done (then nothing is left half done: the join is plain). */
-  function setJoin(a, b, type, length, h) {
+  function setJoin(a, b, type, length, h, style) {
     const ga = h.withLinked([a]), gb = h.withLinked([b]);
     // undo what is there: a cross fade's overlap goes back to a plain cut where it was made
     const overlap = end(a) - b.start;
@@ -96,8 +96,10 @@
     if (why) return why === "no spare media beyond the cut" ? "there is no spare footage either side of the cut to blend" : why;
     const d = r3(end(a) - b.start);
     for (const x of ga) x.transitionOut = x.kind === "audio" ? { type: "cross", duration: d, curve: "power" } : undefined;
+    // 24 Nov: a transition from the Transitions panel is a cross fade with a style (ffmpeg's xfade name)
+    const st = style && style !== "fade" ? { style: String(style) } : {};
     for (const x of gb) x.transitionIn = x.kind === "audio" ? { type: "cross", duration: d, curve: "power", cut: r3(cut) }
-      : { type: "cross", duration: d, cut: r3(cut) };
+      : { type: "cross", duration: d, cut: r3(cut), ...st };
     return null;
   }
 

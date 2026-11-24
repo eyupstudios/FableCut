@@ -4772,3 +4772,13 @@ body.track-size-s .join-btn { width: 14px; height: 14px; margin: -7px 0 0 -7px; 
   transition: opacity 0.12s;
 }
 .hover-tip.on { opacity: 1; }
+
+/* Transitions tab (24 Nov) */
+.xf-head { display: flex; flex-direction: column; gap: 4px; padding: 6px 4px 8px; }
+.xf-head input { width: 56px; }
+.xf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; padding: 2px 4px 10px; }
+.xf-tile { display: flex; flex-direction: column; gap: 4px; align-items: center; padding: 4px; border-radius: 8px; cursor: grab; border: 1px solid transparent; }
+.xf-tile:hover { border-color: var(--accent, #7b6cff); background: rgba(255,255,255,.04); }
+.xf-tile canvas { width: 112px; height: 63px; border-radius: 6px; background: #000; }
+.xf-tile span { font-size: 11px; text-align: center; }
+.join-style select { margin-left: 6px; }
