@@ -40,7 +40,7 @@ const FRAMES_DIR = path.join(ANALYSIS_DIR, "frames");
    A regenerable cache too, so also inside analysis/. */
 const PROXIES_DIR = path.join(ANALYSIS_DIR, "proxies");
 const PROJECT_FILE = path.join(DATA_DIR, "project.json");
-const LIBRARY_SUBDIRS = ["sfx", "elements", "svg", "fonts", "presets", "templates"];
+const LIBRARY_SUBDIRS = ["sfx", "elements", "svg", "fonts", "presets", "templates", "stickers"];
 
 /* The asset library ships with the repo but users also drop their own files in
    (library/sfx is gitignored precisely for that). When the data dir is split

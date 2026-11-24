@@ -40,7 +40,10 @@ test("two cuts of one stream with their own sound: yes, with the cuts in recordi
 });
 
 test("anything that is not a plain cut is a no, and it says why", () => {
-  no((p) => p.clips.push({ id: "t", kind: "text", track: "V2", start: 5, duration: 4, props: { ...DEFAULTS, text: "PART 3" } }), "title");
+  // 24 Nov: a plain title on top is laid on by the fast render (overlays.py); a title in among the cuts, or one
+  // animated word by word, is still frame by frame
+  no((p) => p.clips.push({ id: "t", kind: "text", track: "V1", start: 5, duration: 4, props: { ...DEFAULTS, text: "PART 3" } }), "title");
+  no((p) => p.clips.push({ id: "t", kind: "text", track: "V2", start: 5, duration: 4, props: { ...DEFAULTS, text: "PART 3", textAnim: "word-pop" } }), "word by word");
   no((p) => { p.clips[0].keyframes = { opacity: [{ t: 0, v: 0 }, { t: 1, v: 1 }] }; }, "animated");
   no((p) => { p.clips[3].transitionIn = { type: "fade", duration: 1 }; }, "transition");
   no((p) => { p.clips[0].props.speed = 2; }, "sound");                     // the picture sped up, its sound not: out of step
@@ -67,7 +70,8 @@ test("the sound must be the recording's own, untouched", () => {
   no((p) => { p.clips[1].start += 3; }, "sound");                         // moved off its picture
   no((p) => { p.clips[0].props.volume = 1; }, "sound");                   // the picture clip plays its sound as well: twice as loud
   no((p) => { p.clips[1].fx = [{ type: "eq" }]; }, "sound effect");
-  no((p) => { p.clips.push({ id: "mu", mediaId: "m", kind: "audio", track: "A3", start: 0, in: 100, duration: 30, props: { ...DEFAULTS } }); }, "other sound");
+  // 24 Nov: other plain sound (music, a sound effect) is mixed in by the fast render; with an effect on it, not
+  no((p) => { p.clips.push({ id: "mu", mediaId: "m", kind: "audio", track: "A3", start: 0, in: 100, duration: 30, props: { ...DEFAULTS }, fx: [{ type: "eq" }] }); }, "sound effect");
   no((p) => { p.tracks[3].gain = -6; }, "track A1");
   no((p) => { p.tracks[4].mute = true; }, "track A2");
   no((p) => { p.master = { gain: -3 }; }, "master");

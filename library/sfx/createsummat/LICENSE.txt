@@ -1,0 +1,3 @@
+Create Summat sound effects - made from scratch by Create Summat (synthesised by tools/make_sfx.py; nothing recorded or
+copied). Dedicated to the public domain: CC0 1.0 Universal, https://creativecommons.org/publicdomain/zero/1.0/
+Use them in any video, commercial included, with no credit needed.

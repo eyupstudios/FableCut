@@ -86,7 +86,7 @@ const ANIMATABLE = ["x", "y", "scale", "rotation", "opacity", "volume", "pan", "
   "fontSize", "letterSpacing", "glow", "anchorX", "anchorY", "trimStart", "trimEnd", "trimOffset", "pathOffset"];
 const TRANSITIONS = ["none", "fade", "slide-left", "slide-right", "slide-up", "slide-down",
   "zoom", "wipe", "wipe-right", "wipe-up", "wipe-down", "iris", "spin", "blur", "whip",
-  "glitch", "pop", "dip-black", "dip-white", "cross"];
+  "glitch", "pop", "bounce", "dip-black", "dip-white", "cross"];
 const TEXT_ANIMS = ["none", "typewriter", "word-pop", "word-slide", "karaoke", "highlight",
   "letter-pop", "wave", "bounce", "shake",
   "clip-reveal", "zoom-in", "font-cut", "rise-mask"];
@@ -3396,6 +3396,7 @@ function toggleSfxPreview(f, btn) {
 function renderLibrary() {
   const dir = state.binTab;
   if (dir === "project") return;
+  if (dir === "stickers") return renderStickersTab();
   const files = runtime.library[dir] || [];
   els.libList.innerHTML = "";
   if (!files.length) {
@@ -3405,8 +3406,18 @@ function renderLibrary() {
       <p class="hint">Drop files into<br><b>library/${dir}/</b><br>— this list live-updates.</p></div>`;
     return;
   }
+  if (dir === "sfx") {                                    // 24 Nov: your own sound, next to ours
+    const own = document.createElement("div");
+    own.className = "xf-head";
+    own.innerHTML = `<button type="button" class="btn tiny accent" id="sfxOwn" data-tip="Pick a sound file on this PC (MP3, WAV, OGG, M4A): it goes into the project and onto the timeline at the playhead">Add my own sound</button>
+      <span class="bin-sub">Ours are made by Create Summat and free to use anywhere (CC0)</span><input type="file" id="sfxFile" accept="audio/*,.mp3,.wav,.ogg,.m4a" hidden>`;
+    els.libList.appendChild(own);
+    own.querySelector("#sfxOwn").addEventListener("click", () => own.querySelector("#sfxFile").click());
+    own.querySelector("#sfxFile").addEventListener("change", (e) => addOwnFile(e.target.files, "audio"));
+  }
   for (const f of files) {
     const kind = libKind(f.name);
+    if (dir === "sfx" && !kind) continue;                 // the licence note beside them is not a sound
     const item = document.createElement("div");
     item.className = "bin-item lib-item";
     item.draggable = true;
@@ -3450,6 +3461,8 @@ function setBinTab(tab) {
   if (tab !== "transitions") stopXfPreviews();
   if (tab === "shapes") renderShapesTab();
   else if (tab === "transitions") renderTransitionsTab();
+  else if (tab === "text") renderTextTab();
+  else if (tab === "stickers") fetchLibrary("stickers").then(renderStickersTab);
   else if (tab === "templates") { renderTemplatesTab(); fetchSaved("templates").then(() => { if (state.binTab === "templates") renderTemplatesTab(); }); }
   else if (!isProj) fetchLibrary(tab).then(renderLibrary);
 }
@@ -11621,6 +11634,12 @@ function applyTransition(p, type, k, W, H, dir, audioG = null) {
       p.opacity *= 1 - k * k;
       break;
     }
+    case "bounce": {   // 24 Nov: drops in from above and bounces to rest (in); rises away as it fades (out)
+      const u = dir < 0 ? 1 - Math.sqrt(k) : Math.sqrt(k);
+      if (dir < 0) p.y = (+p.y || 0) - H * 0.5 * (1 - bounceOut(u));
+      else { p.y = (+p.y || 0) - H * 0.5 * k; p.opacity *= 1 - k; }
+      break;
+    }
     case "pop": // overshoot scale (backOut) — sticker/caption entrance
       p.scale = (+p.scale || 1) * Math.max(0.001, backOut(1 - k));
       p.opacity *= Math.min(1, (1 - k) * 2.5);
@@ -15031,6 +15050,116 @@ function xfOnNearestJoin(style, track, t) {
   }
   toast("No join there: put a transition between two clips that touch on one track");
 }
+/* ── Text (24 Nov): animated title presets in the Brand kit's heading font and colours (asked of Create Summat; its
+   defaults otherwise). Pop in, Slide in, Bounce and Fade render with the fast renderer (ffmpeg moves the title, drawn
+   once); Typewriter too (one picture per letter). ── */
+const TEXT_PRESETS = [
+  { id: "pop", name: "Pop in", tip: "Pops up with a little overshoot", tin: { type: "pop", duration: 0.45 }, tout: { type: "fade", duration: 0.3 } },
+  { id: "slide", name: "Slide in", tip: "Slides up into place", tin: { type: "slide-up", duration: 0.5 }, tout: { type: "fade", duration: 0.3 } },
+  { id: "typewriter", name: "Typewriter", tip: "Types itself out, letter by letter", anim: "typewriter", tout: { type: "fade", duration: 0.3 } },
+  { id: "bounce", name: "Bounce", tip: "Drops in from above and bounces", tin: { type: "bounce", duration: 0.9 }, tout: { type: "fade", duration: 0.3 } },
+  { id: "fade", name: "Fade", tip: "Fades in and out", tin: { type: "fade", duration: 0.5 }, tout: { type: "fade", duration: 0.5 } },
+];
+async function brandKit() {
+  if (runtime.brandKit !== undefined) return runtime.brandKit;
+  const r = await askHost("brand-request", {}, 3000);
+  runtime.brandKit = (r && r.kit) || null;
+  return runtime.brandKit;
+}
+async function renderTextTab() {
+  const kit = await brandKit(), col = (kit && kit.colours) || {}, fonts = (kit && kit.fonts) || {};
+  const look = { font: fonts.heading || "Bebas Neue", color: col.text || "#FFFFFF", stroke: col.secondary || "#011A35", accent: col.primary || "#B6F23A" };
+  runtime.textLook = look;
+  els.libList.innerHTML = `<div class="xf-head"><span class="bin-sub">${kit ? `Your Brand kit "${escapeHtml(kit.name || "")}": ${escapeHtml(look.font)}` : `Create Summat's colours and ${escapeHtml(look.font)} (no Brand kit found)`}. Click one: a title at the playhead, ready to type over.</span></div><div class="xf-grid" id="txGrid"></div>`;
+  const grid = $("txGrid");
+  for (const pr of TEXT_PRESETS) {
+    const t = document.createElement("div");
+    t.className = "xf-tile tx-tile";
+    t.setAttribute("data-tip", `${pr.name}: ${pr.tip}. Fast render.`);
+    t.innerHTML = `<div class="tx-sample tx-${pr.id}" style="font-family:'${escapeHtml(look.font)}';color:${escapeHtml(look.accent)};-webkit-text-stroke:1px ${escapeHtml(look.stroke)}">TITLE</div><span>${escapeHtml(pr.name)}</span>`;
+    t.addEventListener("click", () => addTextPreset(pr));
+    grid.appendChild(t);
+  }
+}
+function addTextPreset(pr) {
+  const look = runtime.textLook || { font: "Bebas Neue", color: "#FFFFFF", stroke: "#011A35", accent: "#B6F23A" };
+  const dur = 4, track = stickerTrack(state.time, dur);
+  if (!track) { toast("Every video track is locked"); return; }
+  pushUndo();
+  const H = project.height || 1080;
+  const c = { id: "c_" + uid(), mediaId: null, kind: "text", track, start: state.time, in: 0, duration: dur, name: pr.name,
+    props: { ...DEFAULT_PROPS, text: "YOUR TITLE", font: look.font, fontSize: Math.round(H * 0.11), color: look.accent,
+      strokeWidth: Math.max(4, Math.round(H * 0.006)), strokeColor: look.stroke, textShadow: 14, uppercase: true, y: Math.round(H * 0.28),
+      textAnim: pr.anim || "none", wordRate: 0.24 } };
+  if (pr.tin) c.transitionIn = { ...pr.tin };
+  if (pr.tout) c.transitionOut = { ...pr.tout };
+  project.clips.push(c);
+  selectClip(c.id); scheduleSave(); renderInspector();
+  toast(`${pr.name}: type your words in the Inspector`);
+}
+/* ── Stickers (24 Nov): Microsoft Fluent Emoji 3D (MIT licence - free in commercial videos; on the Credits page) and
+   your own images. A sticker goes on the top free video track at the playhead, a quarter of the frame high, for 3 s;
+   drag it, resize it from a corner, turn it with the knob, and trim it on the timeline like any clip. ── */
+function stickerName(f) { return f.name.replace(/\.[^.]+$/, "").replace(/-/g, " "); }
+function renderStickersTab() {
+  const files = (runtime.library.stickers || []).filter((f) => libKind(f.name) === "image");
+  const q = (runtime.stickerQuery || "").toLowerCase();
+  els.libList.innerHTML = `<div class="xf-head"><button type="button" class="btn tiny accent" id="stOwn" data-tip="Pick a PNG with a see-through background (or any picture) on this PC: it goes on the timeline at the playhead">Add my own image</button>
+    <input type="search" id="stSearch" class="bin-search" placeholder="Search stickers" value="${escapeHtml(runtime.stickerQuery || "")}" aria-label="Search stickers">
+    <span class="bin-sub">Microsoft Fluent Emoji, free to use in commercial videos (MIT licence, see Credits)</span>
+    <input type="file" id="stFile" accept="image/png,image/webp,image/gif,image/jpeg" hidden></div><div class="st-grid" id="stGrid"></div>`;
+  const grid = $("stGrid");
+  for (const f of files.filter((x) => !q || stickerName(x).includes(q))) {
+    const t = document.createElement("div");
+    t.className = "st-tile"; t.draggable = true;
+    t.setAttribute("data-tip", `${stickerName(f)}: click to put it at the playhead, or drag it onto the timeline`);
+    t.innerHTML = `<img alt="" loading="lazy"><span></span>`;
+    t.querySelector("img").src = f.src; t.querySelector("span").textContent = stickerName(f);
+    t.addEventListener("dragstart", (e) => { const m = mediaForLibraryItem(f); if (!m) { e.preventDefault(); return; }
+      e.dataTransfer.setData("text/fablecut-media", m.id); e.dataTransfer.effectAllowed = "copy"; });
+    t.addEventListener("click", () => addSticker(f));
+    grid.appendChild(t);
+  }
+  $("stSearch").addEventListener("input", (e) => { runtime.stickerQuery = e.target.value; const pos = e.target.selectionStart;
+    renderStickersTab(); const s2 = $("stSearch"); s2.focus(); s2.setSelectionRange(pos, pos); });
+  $("stOwn").addEventListener("click", () => $("stFile").click());
+  $("stFile").addEventListener("change", (e) => addOwnFile(e.target.files, "image"));
+}
+/** The top video track with nothing on it from t for `dur` seconds (a new one when all are busy). */
+function stickerTrack(t, dur) {
+  const vids = TRACKS.filter((x) => x.kind === "video" && !isTrackLocked(x.id)).map((x) => x.id);
+  const free = (id) => !project.clips.some((c) => c.track === id && c.start < t + dur && c.start + c.duration > t);
+  return vids.find(free) || vids[0];
+}
+/** Put a sticker (or your own picture) on the timeline: a quarter of the frame high, 3 s, centred a little high. */
+async function addSticker(f) {
+  const m = mediaForLibraryItem(f);
+  if (!m) return;
+  if (!runtime.mediaAux.get(m.id)?.img) { try { await loadMediaMetadata(m); } catch { } }
+  placeSticker(m);
+}
+function placeSticker(m) {
+  const dur = 3, c = addClipFromMedia(m, stickerTrack(state.time, dur), state.time);
+  if (!c) return;
+  c.duration = dur;
+  const H = project.height || 1080, W = project.width || 1920, img = runtime.mediaAux.get(m.id)?.img;
+  const ih = (img && (img.naturalHeight || img.height)) || m.height || 256, iw = (img && (img.naturalWidth || img.width)) || m.width || 256;
+  const fitted = Math.min(W / iw, H / ih);                // "contain" fits it to the canvas first
+  c.props.scale = +clamp((H * 0.25) / (ih * fitted), 0.02, 4).toFixed(3);
+  c.props.y = Math.round(-H * 0.12);
+  state.dirtyTimeline = true; scheduleSave(); renderInspector();
+  toast(`${m.name.replace(/\.[^.]+$/, "")}: drag it on the picture, a corner resizes it, the knob turns it`);
+}
+/** "Add my own image / sound": the file is imported into the project, then put at the playhead. */
+async function addOwnFile(fileList, kind) {
+  const files = [...(fileList || [])];
+  if (!files.length) return;
+  const added = await importFiles(files);
+  for (const m of added || []) {
+    if (m.kind === "image" && kind === "image") placeSticker(m);
+    else if (m.kind === "audio" && kind === "audio") addClipFromMedia(m, null, state.time);
+  }
+}
 function renderShapesTab() {
   const rows = [
     ...Object.entries(SHAPE_PRESETS).map(([k, pre]) => ({ k, name: pre.label, sub: "Shape layer", run: () => addShapeLayer(k) })),
@@ -16135,6 +16264,14 @@ function wordIsCurrent(clk, i, n, local) {
   const [a, b] = clk(i);
   const until = Math.max(b, a + 0.05) + 0.1;
   return local >= a && local < (i + 1 < n ? Math.min(clk(i + 1)[0], until) : until);
+}
+/** Penner's bounce-out (the same steps as ffmpeg's expression in Create Summat's overlays.py). */
+function bounceOut(u) {
+  const n = 7.5625, d = 2.75;
+  if (u < 1 / d) return n * u * u;
+  if (u < 2 / d) return n * (u -= 1.5 / d) * u + 0.75;
+  if (u < 2.5 / d) return n * (u -= 2.25 / d) * u + 0.9375;
+  return n * (u -= 2.625 / d) * u + 0.984375;
 }
 const backOut = (u) => { const c1 = 1.70158, c3 = c1 + 1; const v = u - 1; return 1 + c3 * v * v * v + c1 * v * v; };
 function hexToRgba(hex, a) {
@@ -18206,10 +18343,49 @@ function fastRenderChoice() {
 }
 function fmtSlowed(s) { return s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`; }
 /** Hand the cuts to Create Summat: it renders them on its Queue, into this editor's exports folder. */
+/** 24 Nov: a title or picture of the fast render, drawn once (or once per typed letter) as a PNG at rest - its size,
+ *  rotation and look in it, its place, fading and movement left to ffmpeg (Create Summat's overlays.py). */
+function rasterOverlay(o) {
+  const c = project.clips.find((x) => x.id === o.id);
+  if (!c) return null;
+  const W = els.preview.width, H = els.preview.height;
+  const cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+  const g = cv.getContext("2d");
+  const clone = JSON.parse(JSON.stringify(c));
+  delete clone.transitionIn; delete clone.transitionOut; delete clone.keyframes;
+  clone.start = 0; clone.duration = Math.max(c.duration, 1e6);
+  clone.props = { ...clone.props, x: 0, y: 0, opacity: 1 };
+  const draw = (t) => { const main = ctx2d; ctx2d = g; g.clearRect(0, 0, W, H);
+    const xo = XF_OUT; XF_OUT = new Map();
+    try { drawClipPicture(clone, W, H, t, false); } finally { ctx2d = main; XF_OUT = xo; } };
+  const times = [];
+  if (o.typewriter > 0) {
+    const n = Math.min(400, String(clone.props.text || "").length);
+    for (let k = 0; k <= n; k++) times.push(k * o.typewriter);
+  } else times.push(Math.min(c.duration / 2, 0.01));
+  draw(o.typewriter > 0 ? times[times.length - 1] + 1e-3 : times[0]);         // the whole of it: where to cut
+  const px = g.getImageData(0, 0, W, H).data;
+  let x0 = W, y0 = H, x1 = -1, y1 = -1;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (px[(y * W + x) * 4 + 3] > 0) {
+    if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  if (x1 < 0) return null;                                                // nothing drawn
+  const bw = x1 - x0 + 1, bh = y1 - y0 + 1, crop = document.createElement("canvas");
+  crop.width = bw; crop.height = bh;
+  const frames = times.map((t, k) => {
+    draw(o.typewriter > 0 ? t + 1e-3 : t);
+    crop.getContext("2d").clearRect(0, 0, bw, bh);
+    crop.getContext("2d").drawImage(cv, x0, y0, bw, bh, 0, 0, bw, bh);
+    return { t: o.typewriter > 0 ? +(k * o.typewriter).toFixed(4) : 0, png: crop.toDataURL("image/png") };
+  });
+  return { kind: o.kind, start: o.start, end: o.end, left: x0 + o.x, top: y0 + o.y, w: bw, h: bh, opacity: o.opacity,
+    tin: o.tin, tout: o.tout, frames };
+}
 function sendFastExport(choice) {
   const fps = projectFps(), copy = (pendingDownload && pendingDownload.folder) || "";
   pendingDownload = null;
+  const overlays = (choice.plan.overlays || []).map(rasterOverlay).filter(Boolean);
   hostWindow().postMessage({ source: "fablecut", type: "fast-export", project: project.name || "",
+    overlays, sounds: choice.plan.sounds || [], canvas: { w: els.preview.width, h: els.preview.height },
     pieces: choice.plan.pieces.map((p) => ({ file: p.file, in: p.in, out: p.out, speed: p.speed || 1, sound: p.sound || "normal",
       fadeIn: p.fadeIn || 0, fadeInColor: p.fadeInColor || "black", fadeOut: p.fadeOut || 0, fadeOutColor: p.fadeOutColor || "black",
       cross: p.cross || 0 })),

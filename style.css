@@ -4782,3 +4782,20 @@ body.track-size-s .join-btn { width: 14px; height: 14px; margin: -7px 0 0 -7px; 
 .xf-tile canvas { width: 112px; height: 63px; border-radius: 6px; background: #000; }
 .xf-tile span { font-size: 11px; text-align: center; }
 .join-style select { margin-left: 6px; }
+
+/* Stickers tab (24 Nov) */
+.st-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; padding: 2px 4px 10px; }
+.st-tile { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px; border-radius: 8px; cursor: grab; border: 1px solid transparent; }
+.st-tile:hover { border-color: var(--accent, #7b6cff); background: rgba(255,255,255,.04); }
+.st-tile img { width: 48px; height: 48px; object-fit: contain; }
+.st-tile span { font-size: 10px; text-align: center; line-height: 1.15; max-height: 2.3em; overflow: hidden; }
+
+/* Text tab (24 Nov): each preset's little moving sample */
+.tx-tile .tx-sample { width: 112px; height: 63px; border-radius: 6px; background: #0b1730; display: flex; align-items: center; justify-content: center; font-size: 22px; letter-spacing: 1px; overflow: hidden; }
+.tx-pop { animation: txPop 2.2s infinite; } .tx-slide { animation: txSlide 2.2s infinite; } .tx-bounce { animation: txBounce 2.2s infinite; }
+.tx-fade { animation: txFade 2.2s infinite; } .tx-typewriter { animation: txType 2.2s steps(5) infinite; white-space: nowrap; overflow: hidden; }
+@keyframes txPop { 0%, 10% { transform: scale(0); } 25% { transform: scale(1.15); } 32%, 100% { transform: scale(1); } }
+@keyframes txSlide { 0%, 10% { transform: translateY(40px); opacity: 0; } 35%, 100% { transform: none; opacity: 1; } }
+@keyframes txBounce { 0%, 10% { transform: translateY(-50px); } 25% { transform: none; } 32% { transform: translateY(-12px); } 40%, 100% { transform: none; } }
+@keyframes txFade { 0%, 10% { opacity: 0; } 40%, 80% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes txType { 0%, 10% { clip-path: inset(0 100% 0 0); } 60%, 100% { clip-path: inset(0 0 0 0); } }

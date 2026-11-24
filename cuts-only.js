@@ -36,6 +36,19 @@
   /* 23 Nov: fades and transitions the fast renderer makes itself (ffmpeg fade / xfade, the sound faded with it) -
      Fade in / out and Dip to black / white (dip-*), Cross fade (cross). See fades.js. */
   const FAST_FADES = ["dip-black", "dip-white", "cross"];
+  /* 24 Nov (Steve: stickers, animated text and sound effects with the FAST renderer): on top of the cuts, titles and
+     pictures (stickers, your own PNGs) on other video tracks, and sound effects / music on the sound tracks, are laid
+     on by ffmpeg in one more pass (Create Summat's overlays.py). The Editor draws each title / picture once as a PNG
+     (its rotation and size in it); ffmpeg places it, fades / pops / slides / bounces it in and out, and a typewriter
+     title is one PNG per letter. Anything else (keyframes, masks, effects, word-by-word animations) is frame by frame. */
+  const OVERLAY_KINDS = ["image", "text"];
+  const OVERLAY_ANIMS = ["fade", "pop", "slide-left", "slide-right", "slide-up", "slide-down", "bounce"];
+  const OVERLAY_PROPS = ["x", "y", "scale", "rotation", "opacity"];
+  const TEXT_ANIMS_FAST = ["none", "typewriter"];
+  const isTextStyle = (k) => !["x", "y", "scale", "rotation", "opacity", "blend", "matte", "matteTrack", "masks", "grade", "motionBlur",
+    "brightness", "contrast", "saturation", "hue", "blur", "grayscale", "sepia", "invert", "temperature", "tint", "vignette", "shake",
+    "rgbSplit", "grain", "filterPreset", "chromaKey", "bgRemove", "textPath", "pathOffset", "parent", "anchorX", "anchorY",
+    "autoOrient", "cropL", "cropR", "cropT", "cropB", "flipH", "flipV", "cornerRadius"].includes(k);
   const near = (x, y, tol) => Math.abs(x - y) <= tol;
   /** The transition a sound stem must have for its picture's: the same kind and length (equal-power for a cross). */
   const sameFade = (s, want, tol) => (!s && !want) || (!!s && !!want && s.type === want.type && near(s.duration, want.duration, tol) &&
@@ -57,8 +70,9 @@
     const media = new Map((project.media || []).map((m) => [m.id, m]));
     const shape = (project.width || 16) / (project.height || 9);
 
-    const videos = [], sounds = [];
+    const videos = [], sounds = [], overlays = [];
     for (const c of project.clips) {
+      if (OVERLAY_KINDS.includes(c.kind)) { overlays.push(c); continue; }        // checked below, once the main track is known
       for (const k of Object.keys(c)) if (!CLIP_KEYS.has(k) && !empty(c[k])) {
         if ((k === "transitionIn" || k === "transitionOut") && FAST_FADES.includes(c[k].type)) continue;   // checked below
         no(k === "keyframes" ? `a clip at ${clock(c.start)} is animated (keyframes)`
@@ -130,11 +144,53 @@
       if (cross) { piece.cross = cross; if (tin.style && tin.style !== "fade") piece.crossStyle = tin.style; }
       out.pieces.push(piece);
     }
-    if (sounds.some((s) => !used.has(s))) no("there is other sound on the timeline (music, a voice-over, or sound moved off its picture)");
+    // 24 Nov: other sound (a sound effect, music) is mixed in by the overlay pass when it is plain: its own file, a level
+    out.sounds = [];
+    for (const s of sounds.filter((x) => !used.has(x))) {
+      const m = media.get(s.mediaId), where = clock(s.start);
+      const linked = s.linkGroup && project.clips.some((x) => x !== s && x.linkGroup === s.linkGroup && x.kind === "video");
+      if (linked) { no("there is sound moved off its picture"); continue; }
+      const extra = Object.keys(s).filter((k) => !CLIP_KEYS.has(k) && !empty(s[k]) && !(["transitionIn", "transitionOut"].includes(k) && s[k].type === "fade"));
+      if (extra.length) { no(`the sound at ${where} has ${extra[0] === "fx" ? "a sound effect on it" : extra[0] === "keyframes" ? "level changes (keyframes)" : extra[0] + " set"}`); continue; }
+      const sp = speedOf(s, defaults), bad = changed(s, ["volume", "gain", "audioChannel", "pan", "channelMode"]);
+      if (bad || Math.abs(sp - 1) > 1e-9) { no(`the sound at ${where} has ${bad || "speed"} changed`); continue; }
+      if (!m) { no(`the sound at ${where} has no file`); continue; }
+      const p = s.props || {};
+      out.sounds.push({ file: m.src || m.name, in: +s.in || 0, at: s.start, duration: s.duration,
+        volume: p.volume != null ? +p.volume : 1, gain: +p.gain || 0,
+        fadeIn: s.transitionIn ? +s.transitionIn.duration || 0 : 0, fadeOut: s.transitionOut ? +s.transitionOut.duration || 0 : 0 });
+    }
+    // titles and pictures over the picture
+    out.overlays = [];
+    const mainTrack = videos.length ? videos[0].track : null;
+    for (const c of overlays) {
+      const where = clock(c.start), p = c.props || {};
+      if (c.track === mainTrack) { no(`there is a ${c.kind === "text" ? "title" : "picture"} between the cuts at ${where}`); continue; }
+      const extra = Object.keys(c).filter((k) => !CLIP_KEYS.has(k) && !empty(c[k]) &&
+        !(["transitionIn", "transitionOut"].includes(k) && OVERLAY_ANIMS.includes(c[k].type)));
+      if (extra.length) { no(extra[0] === "keyframes" ? `the ${c.kind === "text" ? "title" : "picture"} at ${where} is animated with keyframes`
+        : extra[0].startsWith("transition") ? `the ${c.kind === "text" ? "title" : "picture"} at ${where} has a ${c[extra[0]].type} transition`
+        : `the ${c.kind === "text" ? "title" : "picture"} at ${where} has ${extra[0]} set`); continue; }
+      const bad = Object.keys(p).find((k) => !OVERLAY_PROPS.includes(k) && !(c.kind === "text" && isTextStyle(k)) &&
+        !(k === "fit" && p.fit === "contain") && !empty(p[k]) && !(k in defaults && (p[k] === defaults[k] || (typeof defaults[k] === "number" && Math.abs(+p[k] - defaults[k]) < 1e-9))));
+      if (bad) { no(`the ${c.kind === "text" ? "title" : "picture"} at ${where} has ${bad} changed`); continue; }
+      if (c.kind === "text" && !TEXT_ANIMS_FAST.includes(p.textAnim || "none")) { no(`the title at ${where} is animated word by word (${p.textAnim})`); continue; }
+      if (c.kind === "image" && !media.get(c.mediaId)) { no(`the picture at ${where} has no file`); continue; }
+      const tin = c.transitionIn && c.transitionIn.duration > 0 ? { type: c.transitionIn.type, duration: Math.min(+c.transitionIn.duration, c.duration) } : null;
+      const tout = c.transitionOut && c.transitionOut.duration > 0 ? { type: c.transitionOut.type, duration: Math.min(+c.transitionOut.duration, c.duration) } : null;
+      out.overlays.push({ id: c.id, kind: c.kind, track: c.track, start: c.start, end: c.start + c.duration, x: +p.x || 0, y: +p.y || 0,
+        opacity: p.opacity != null ? +p.opacity : 1, tin, tout,
+        typewriter: c.kind === "text" && p.textAnim === "typewriter" ? +(p.wordRate || 0.15) / 4 : 0 });
+    }
+    // lower tracks first (V2 under V3), as the editor draws them
+    const order = (project.tracks || []).filter((t) => t.kind === "video").map((t) => t.id).reverse();
+    out.overlays.sort((a, b) => (order.indexOf(a.track) - order.indexOf(b.track)) || (a.start - b.start));
     out.duration = at;
 
     if (opts.range && !why.length && out.pieces.some((p) => p.fadeIn || p.fadeOut || p.cross))
       no("an IN–OUT range with fades in it");
+    if (opts.range && !why.length && (out.overlays.length || out.sounds.length))
+      no("an IN–OUT range with titles, stickers or sound effects in it");
     if (opts.range && !why.length) {                       // IN–OUT: the same pieces, trimmed to the range
       const a = Number(opts.range.start) || 0, b = Number(opts.range.end);
       out.pieces = out.pieces.map((p) => {                 // timeline seconds x speed = recording seconds
@@ -145,14 +201,17 @@
       if (!out.pieces.length) no("the IN–OUT range is empty");
     }
     out.ok = !why.length;
-    if (!out.ok) out.pieces = [];
+    if (!out.ok) { out.pieces = []; out.overlays = []; out.sounds = []; }
     return out;
   }
 
   /** The line the Export window shows. */
   function describe(p, hosted) {
     const fades = (p.pieces || []).some((x) => x.fadeIn || x.fadeOut || x.cross);
-    if (p.ok && hosted) return { fast: true, text: `Fast render. This edit is only cuts${fades ? " and fades" : ""}, so Create Summat renders it straight from the recording.` };
+    const on = [(p.overlays || []).some((x) => x.kind === "text") && "titles", (p.overlays || []).some((x) => x.kind === "image") && "stickers",
+      (p.sounds || []).length && "sound effects"].filter(Boolean);
+    const what = `cuts${fades ? " and fades" : ""}${on.length ? ", with " + on.join(", ").replace(/, ([^,]*)$/, " and $1") + " on top" : ""}`;
+    if (p.ok && hosted) return { fast: true, text: `Fast render. This edit is only ${what}, so Create Summat renders it straight from the recording.` };
     if (p.ok) return { fast: false, text: `Method: frame by frame. (Only cuts${fades ? " and fades" : ""}: inside Create Summat this would use its fast renderer.)` };
     return { fast: false, text: `Method: frame by frame, needed because ${p.why[0]}${p.why.length > 1 ? ` (and ${p.why.length - 1} more)` : ""}.` };
   }
@@ -162,5 +221,5 @@
   function slowedSeconds(p) { return (p.pieces || []).filter((x) => x.speed < 1 - 1e-9).reduce((n, x) => n + (x.out - x.in) / x.speed, 0); }
   function smoothExtraSeconds(p, fps, height) { return slowedSeconds(p) * SMOOTH_X * Math.pow(height / 1080, 1.6) * (fps / 60); }
 
-  return { plan, describe, slowedSeconds, smoothExtraSeconds, SMOOTH_X, SOUNDS, CLIP_KEYS, PROJECT_KEYS };
+  return { plan, describe, slowedSeconds, smoothExtraSeconds, SMOOTH_X, SOUNDS, CLIP_KEYS, PROJECT_KEYS, OVERLAY_ANIMS };
 });
