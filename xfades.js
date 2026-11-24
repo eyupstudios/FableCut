@@ -26,14 +26,13 @@
     ["vertopen", "Open from the middle", "Shapes"], ["horzopen", "Open across", "Shapes"], ["zoomin", "Zoom in", "Shapes"],
   ];
   const IDS = STYLES.map((s) => s[0]);
-  const SOFT = 0.15;                                  // a smooth wipe's soft edge, part of the frame
   const clamp01 = (v) => Math.min(1, Math.max(0, v));
   const smooth = (a, b, x) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
   const label = (id) => (STYLES.find((s) => s[0] === id) || [id, id])[1];
 
   function effect(style, P, role, W, H) {
     P = clamp01(+P || 0);
-    const e = { alpha: 1, dx: 0, dy: 0, scale: 1, dip: 0, dipColor: "#000000", clip: null, pixel: 0, blur: 0 };
+    const e = { alpha: 1, dx: 0, dy: 0, scale: 1, dip: 0, dipColor: "#000000", clip: null, pixel: 0, blur: 0, hblur: 0 };
     const inn = role === "in";
     switch (style) {
       case "fade": if (inn) e.alpha = P; break;
@@ -44,20 +43,19 @@
         if (inn) { e.alpha = wA > 0.02 ? 0 : 1; e.dip = 1 - wB; } else e.dip = 1 - wA;
         break;
       }
-      case "hblur": e.blur = 2 * Math.min(P, 1 - P) * W / 48; if (inn) e.alpha = P; break;
+      case "hblur": e.hblur = 1 + 2 * Math.min(P, 1 - P) * 60; if (inn) e.alpha = P; break;   // a sideways smear, as ffmpeg's
       case "pixelize": e.pixel = Math.max(1, Math.round(2 * Math.min(P, 1 - P) * Math.min(W, H) / 20)); if (inn) e.alpha = P; break;
       case "wipeleft": if (inn) e.clip = { kind: "rect", x: W * (1 - P), y: 0, w: W * P, h: H }; break;
       case "wiperight": if (inn) e.clip = { kind: "rect", x: 0, y: 0, w: W * P, h: H }; break;
       case "wipeup": if (inn) e.clip = { kind: "rect", x: 0, y: H * (1 - P), w: W, h: H * P }; break;
       case "wipedown": if (inn) e.clip = { kind: "rect", x: 0, y: 0, w: W, h: H * P }; break;
       case "smoothleft": case "smoothright": case "smoothup": case "smoothdown":
-        if (inn) e.clip = { kind: "soft", dir: style.slice(6), k: P }; break;
+        if (inn) e.clip = { kind: "soft", dir: style.slice(6), k: P }; break;      // a frame-wide soft edge, as ffmpeg's
       case "slideleft": e.dx = inn ? W * (1 - P) : -W * P; break;
       case "slideright": e.dx = inn ? -W * (1 - P) : W * P; break;
       case "slideup": e.dy = inn ? H * (1 - P) : -H * P; break;
       case "slidedown": e.dy = inn ? -H * (1 - P) : H * P; break;
-      case "circleopen": if (inn) e.clip = { kind: "circle", r: P * Math.hypot(W, H) / 2 }; break;
-      case "circleclose": if (inn) e.clip = { kind: "notcircle", r: (1 - P) * Math.hypot(W, H) / 2 }; break;
+      case "circleopen": case "circleclose": if (inn) e.clip = { kind: "soft", dir: style.slice(6), k: P }; break;
       case "radial": if (inn) e.clip = { kind: "wedge", a: P * Math.PI * 2 }; break;
       case "vertopen": if (inn) e.clip = { kind: "rect", x: W * (1 - P) / 2, y: 0, w: W * P, h: H }; break;
       case "horzopen": if (inn) e.clip = { kind: "rect", x: 0, y: H * (1 - P) / 2, w: W, h: H * P }; break;
@@ -69,18 +67,43 @@
     return e;
   }
 
-  /** The soft edge of a smooth wipe as bands: [{x, y, w, h, alpha}] covering the picture shown (alpha 0..1). */
-  function softBands(dir, k, W, H, n = 6) {
-    const horiz = dir === "left" || dir === "right", L = horiz ? W : H;
-    const edge = (1 + SOFT) * k * L - SOFT * L;      // where the solid part ends, from the side it comes in from
-    const out = [];
-    const span = (a, b) => { a = Math.max(0, a); b = Math.min(L, b); return b > a ? [a, b] : null; };
-    const put = (s, alpha) => { if (!s) return; const [a, b] = s;
-      const from = dir === "left" || dir === "up" ? L - b : a;          // "left": it comes in from the right side
-      out.push(horiz ? { x: from, y: 0, w: b - a, h: H, alpha } : { x: 0, y: from, w: W, h: b - a, alpha }); };
-    put(span(0, edge), 1);
-    for (let i = 0; i < n; i++) put(span(edge + (i / n) * SOFT * L, edge + ((i + 1) / n) * SOFT * L), 1 - (i + 0.5) / n);
+  /** A soft transition (ffmpeg's smooth wipes and circles: a soft edge as wide as the frame) as bands, each drawn
+   *  with its own strength: [{kind: "rect", x, y, w, h, alpha} | {kind: "ring", r0, r1, alpha}]. ffmpeg (p = 1 - P):
+   *  smoothleft  b = S(1 + x/w - 2p) (from the right; right / up / down likewise)
+   *  circleopen  b = 1 - S(d/z + (p - 0.5) * 3); circleclose b = 1 - S(1 - d/z + (p - 0.5) * 3)
+   *  (d = the distance from the middle, z = half the diagonal; S = smoothstep 0..1). */
+  function softBands(clip, W, H, n = 16) {
+    const P = clamp01(clip.k), p = 1 - P, S = (x) => smooth(0, 1, x), out = [];
+    if (clip.dir === "open" || clip.dir === "close") {
+      const z = Math.hypot(W, H) / 2;
+      for (let i = 0; i < n; i++) {
+        const d = (i + 0.5) / n;
+        const alpha = clip.dir === "open" ? 1 - S(d + (p - 0.5) * 3) : 1 - S(1 - d + (p - 0.5) * 3);
+        if (alpha > 0.004) out.push({ kind: "ring", r0: (i / n) * z, r1: ((i + 1) / n) * z * (i === n - 1 ? 1.01 : 1), alpha: Math.min(1, alpha) });
+      }
+      return out;
+    }
+    const horiz = clip.dir === "left" || clip.dir === "right", L = horiz ? W : H;
+    for (let i = 0; i < n; i++) {
+      const u = (i + 0.5) / n;                                    // across the frame, from the left / top
+      const v = clip.dir === "left" || clip.dir === "up" ? u : 1 - u;
+      const alpha = S(1 + v - 2 * p);
+      if (alpha <= 0.004) continue;
+      const a = (i / n) * L, len = L / n + (i === n - 1 ? 0 : 0.5);
+      out.push(horiz ? { kind: "rect", x: a, y: 0, w: len, h: H, alpha: Math.min(1, alpha) }
+        : { kind: "rect", x: 0, y: a, w: W, h: len, alpha: Math.min(1, alpha) });
+    }
     return out;
+  }
+
+  /** Cut the canvas to one band of a soft transition. */
+  function bandPath(ctx, band, W, H) {
+    ctx.beginPath();
+    if (band.kind === "ring") {
+      ctx.arc(W / 2, H / 2, Math.max(0.01, band.r1), 0, Math.PI * 2);
+      if (band.r0 > 0.01) ctx.arc(W / 2, H / 2, band.r0, 0, Math.PI * 2, true);
+      ctx.clip("evenodd");
+    } else { ctx.rect(band.x, band.y, band.w, band.h); ctx.clip(); }
   }
 
   /** Hash noise 0..1 for (x, y) - the same pattern every frame, so a dissolve grows rather than flickers. */
@@ -116,25 +139,23 @@
         ctx.globalAlpha = alpha;
         if (e.blur > 0.3) ctx.filter = `blur(${e.blur.toFixed(1)}px)`;
         ctx.translate(W / 2 + e.dx, H / 2 + e.dy); ctx.scale(e.scale, e.scale);
-        if (e.pixel > 1) {
-          const tw = Math.max(1, Math.round(W / e.pixel)), th = Math.max(1, Math.round(H / e.pixel));
+        if (e.pixel > 1 || e.hblur > 1) {
+          const tw = Math.max(1, Math.round(W / (e.pixel || e.hblur))), th = e.pixel > 1 ? Math.max(1, Math.round(H / e.pixel)) : H;
           const t = drawPair._tmp || (drawPair._tmp = (typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(tw, th) : document.createElement("canvas")));
           t.width = tw; t.height = th; t.getContext("2d").drawImage(img, 0, 0, tw, th);
-          ctx.imageSmoothingEnabled = false; ctx.drawImage(t, -W / 2, -H / 2, W, H);
+          ctx.imageSmoothingEnabled = !(e.pixel > 1); ctx.drawImage(t, -W / 2, -H / 2, W, H);
         } else ctx.drawImage(img, -W / 2, -H / 2, W, H);
         ctx.restore();
         if (e.dip > 0) { ctx.save(); ctx.globalAlpha = alpha * e.dip; ctx.fillStyle = e.dipColor; ctx.fillRect(0, 0, W, H); ctx.restore(); }
       };
       if (e.alpha <= 0) continue;
       if (e.clip && e.clip.kind === "soft") {
-        for (const band of softBands(e.clip.dir, e.clip.k, W, H)) {
-          ctx.save(); ctx.beginPath(); ctx.rect(band.x, band.y, band.w, band.h); ctx.clip(); draw(e.alpha * band.alpha); ctx.restore();
-        }
+        for (const band of softBands(e.clip, W, H)) { ctx.save(); bandPath(ctx, band, W, H); draw(e.alpha * band.alpha); ctx.restore(); }
       } else if (e.clip) { ctx.save(); path(ctx, e.clip, W, H); draw(e.alpha); ctx.restore(); }
       else draw(e.alpha);
     }
     ctx.restore();
   }
 
-  return { STYLES, IDS, SOFT, label, effect, softBands, noise, path, drawPair };
+  return { STYLES, IDS, label, effect, softBands, bandPath, noise, path, drawPair };
 });

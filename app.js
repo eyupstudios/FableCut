@@ -11557,6 +11557,7 @@ function xfApply(p, style, P, role, W, H) {
   if (e.dip > 0) { p._dip = Math.max(+p._dip || 0, e.dip); p._dipColor = e.dipColor; }
   if (e.clip) p._xfClip = e.clip;
   if (e.pixel > 1) p._xfPixel = e.pixel;
+  if (e.hblur > 1) p._xfHBlur = e.hblur;
 }
 const DIP_COLOR = { "dip-black": "#000000", "dip-white": "#ffffff" };
 /* Audio fade shapes. `u` runs 0 (silent edge) → 1 (full level). A fade with
@@ -13512,7 +13513,7 @@ function drawClipPicture(c, W, H, t, layered) {
   const p = evalProps(c, t);
   if (p._xfClip && p._xfClip.kind === "soft" && !XF_BAND) {          // a smooth wipe: the soft edge in bands
     let r = { p, geom: null };
-    for (const band of XF.softBands(p._xfClip.dir, p._xfClip.k, W, H)) {
+    for (const band of XF.softBands(p._xfClip, W, H)) {
       XF_BAND = band;
       try { r = drawClipPicture(c, W, H, t, layered); } finally { XF_BAND = null; }
     }
@@ -13520,7 +13521,7 @@ function drawClipPicture(c, W, H, t, layered) {
   }
   let geom = null;
   ctx2d.save();
-  if (XF_BAND) { ctx2d.beginPath(); ctx2d.rect(XF_BAND.x, XF_BAND.y, XF_BAND.w, XF_BAND.h); ctx2d.clip(); p.opacity *= XF_BAND.alpha; }
+  if (XF_BAND) { XF.bandPath(ctx2d, XF_BAND, W, H); p.opacity *= XF_BAND.alpha; }
   else if (p._xfClip) XF.path(ctx2d, p._xfClip, W, H);
   if (p._wipe) {
     ctx2d.beginPath();
@@ -13629,11 +13630,12 @@ function drawClipPicture(c, W, H, t, layered) {
       ctx2d.drawImage(processed, 0, 0, processed.width, processed.height, -dw / 2, -dh / 2, dw, dh);
     } else if (captureGradeInput(c, [src, sx, sy, cw, ch, sw, sh, dw, dh]), grade && (graded = gradeSource(src, sx, sy, cw, ch, sw, sh, dw, dh, grade, matte))) {
       ctx2d.drawImage(graded, 0, 0, graded.width, graded.height, -dw / 2, -dh / 2, dw, dh);
-    } else if (p._xfPixel > 1) {                      // Pixelize: drawn small, then blown up without smoothing
-      const tw = Math.max(1, Math.round(dw / p._xfPixel)), th = Math.max(1, Math.round(dh / p._xfPixel));
+    } else if (p._xfPixel > 1 || p._xfHBlur > 1) {    // Pixelize: drawn small, blown up blocky; Blur: squeezed sideways, smeared back
+      const k = p._xfPixel > 1 ? p._xfPixel : p._xfHBlur;
+      const tw = Math.max(1, Math.round(dw / k)), th = p._xfPixel > 1 ? Math.max(1, Math.round(dh / k)) : Math.max(1, Math.round(dh));
       const tmp = runtime.xfPix || (runtime.xfPix = document.createElement("canvas"));
       tmp.width = tw; tmp.height = th; tmp.getContext("2d").drawImage(src, sx, sy, cw, ch, 0, 0, tw, th);
-      const sm = ctx2d.imageSmoothingEnabled; ctx2d.imageSmoothingEnabled = false;
+      const sm = ctx2d.imageSmoothingEnabled; ctx2d.imageSmoothingEnabled = !(p._xfPixel > 1);
       ctx2d.drawImage(tmp, -dw / 2, -dh / 2, dw, dh); ctx2d.imageSmoothingEnabled = sm;
     } else {
       ctx2d.drawImage(src, sx, sy, cw, ch, -dw / 2, -dh / 2, dw, dh);

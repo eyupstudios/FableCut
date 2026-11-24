@@ -28,7 +28,7 @@ test("every transition starts on the clip before and ends on the clip after", ()
     // at the start the clip after shows nothing (or is off screen), the clip before is whole
     const bHidden = b0.alpha === 0 || (b0.clip && ((b0.clip.w === 0 || b0.clip.h === 0) || b0.clip.r === 0 || b0.clip.k === 0 || b0.clip.a === 0))
       || Math.abs(b0.dx) >= W || Math.abs(b0.dy) >= H || (b0.clip && b0.clip.kind === "notcircle" && b0.clip.r >= Math.hypot(W, H) / 2 - 1)
-      || (b0.clip && b0.clip.kind === "soft" && X.softBands(b0.clip.dir, 0, W, H).every((band) => band.w * band.h === 0 || band.alpha === 0));
+      || (b0.clip && b0.clip.kind === "soft" && X.softBands(b0.clip, W, H).every((band) => band.alpha < 0.01));
     assert.ok(bHidden, `${s}: the clip after is hidden at the start`);
     assert.ok(a0.alpha === 1 && !a0.dx && !a0.dy && a0.scale === 1 && a0.dip === 0, `${s}: the clip before is as it is at the start`);
     // at the end the clip after is whole and in place
@@ -37,7 +37,7 @@ test("every transition starts on the clip before and ends on the clip after", ()
       const c = b1.clip;
       const whole = (c.kind === "rect" && c.w >= W - 1 && c.h >= H - 1) || (c.kind === "circle" && c.r >= Math.hypot(W, H) / 2 - 1)
         || (c.kind === "notcircle" && c.r <= 1) || (c.kind === "wedge" && c.a >= Math.PI * 2 - 1e-9) || (c.kind === "dissolve" && c.k >= 1)
-        || (c.kind === "soft" && X.softBands(c.dir, 1, W, H).some((band) => band.alpha === 1 && band.w >= W - 1 && band.h >= H - 1));
+        || (c.kind === "soft" && X.softBands(c, W, H).length === 16 && X.softBands(c, W, H).every((band) => band.alpha > 0.99));
       assert.ok(whole, `${s}: nothing of the clip after is cut at the end`);
     }
   }
@@ -52,9 +52,11 @@ test("wipes and slides move the way ffmpeg's do (wipe left: the next clip comes 
   assert.ok(X.effect("fadeblack", 0.25, "out", W, H).dip > 0.99);
   assert.ok(X.effect("fadeblack", 0.25, "in", W, H).dip > 0.9);
   assert.ok(X.effect("fadeblack", 0.75, "in", W, H).dip < 0.3);
-  const bands = X.softBands("left", 0.5, W, H);                     // a smooth wipe: solid, then a soft edge
-  assert.equal(bands[0].alpha, 1);
-  assert.ok(bands.slice(1).every((b, i, all) => b.alpha < 1 && (i === 0 || b.alpha < all[i - 1].alpha)));
+  // smooth wipes and circles: ffmpeg's frame-wide soft edge (halfway: strong on the side it comes from, faint on the other)
+  const bands = X.softBands({ kind: "soft", dir: "left", k: 0.5 }, W, H);
+  assert.ok(bands[bands.length - 1].alpha > 0.9 && bands[0].alpha < 0.1 && bands[0].x < bands[bands.length - 1].x);
+  const ring = X.softBands({ kind: "soft", dir: "open", k: 0.5 }, W, H);
+  assert.ok(ring[0].kind === "ring" && ring[0].alpha > ring[ring.length - 1].alpha);
 });
 
 test("a transition dropped on a join is a cross fade with its style; the fast render passes the style on", () => {
