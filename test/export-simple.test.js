@@ -74,3 +74,13 @@ test("25 Nov: 1440p is recommended for YouTube and Shorts (1440x2560), with the 
   assert.ok(r.includes("· Recommended") && r.includes("min longer") && r.includes("bigger") && r.includes('setSetting("xsQualPicked", true)'));
   assert.ok(r.includes('!getSetting("xsQualPicked") && cur.q !== xsRecommended(cur.dest)'));   // the first time: the recommended size
 });
+
+
+test("25 Nov: the 4K line uses the measured fast-render sizes and pace", () => {
+  const src = cut("const XS_FAST_KBPS", "function xsRoughSize");
+  const { XS_FAST_KBPS, xsFastSize } = new Function(src + "; return { XS_FAST_KBPS, xsFastSize };")();
+  assert.deepEqual(XS_FAST_KBPS, { 1080: 8100, 1440: 14000, 2160: 24600 });
+  const gb = (q) => xsFastSize(q, 60, 600) / 1e9;                    // 10 minutes at 60 fps, as measured
+  assert.ok(Math.abs(gb(1440) - 1.05) < 0.02 && Math.abs(gb(2160) - 1.85) < 0.02);
+  assert.ok(js.includes("Math.pow(q / cur, 1.45)"));
+});

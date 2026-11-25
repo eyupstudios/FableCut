@@ -18307,7 +18307,7 @@ const xsRecommended = (dest) => XS_RECOMMENDED[dest] || 1080;
 function xsMinutes(q, frames, method) {
   if (method && method.fast && method.minutes) {
     const cur = xsCurrent().q || 1080;
-    return method.minutes * Math.pow(q / cur, 1.2);
+    return method.minutes * Math.pow(q / cur, 1.45);   // measured 25 Nov (10 min of Part 4): 1080->1440 x1.52, 1440->4K x1.77
   }
   const s = exportTimeGuess(frames, q);
   return s == null ? null : s / 60;
@@ -18441,6 +18441,10 @@ function exportTimeGuess(frames, q, pace) {
 }
 /** A rough file size when the encoder is told a quality, not a bitrate: the bitrates YouTube asks for at each size
  *  (8 / 16 / 40 Mb/s, half as much again above 30 fps), plus the sound. */
+/* The fast render's real sizes (25 Nov, 10 min of Part 4 at 60 fps, hardware encoder): 1080p 8.1, 1440p 14.0,
+   4K 24.6 Mbit/s - used for the 4K line when the fast render will do the export. */
+const XS_FAST_KBPS = { 1080: 8100, 1440: 14000, 2160: 24600 };
+const xsFastSize = (q, fps, duration) => XS_FAST_KBPS[q] && duration > 0 ? Math.round(XS_FAST_KBPS[q] * (fps > 30 ? 1 : 0.67) * 1000 / 8 * duration) : 0;
 function xsRoughSize(q, fps, duration, spec) {
   const base = { 1080: 8000, 1440: 16000, 2160: 40000 }[q];
   if (!base || !(duration > 0)) return 0;
@@ -18461,7 +18465,8 @@ function xsRender() {
   const sp0 = dlvSpec, fps0 = (sp0 && sp0.fps) || projectFps(), range0 = exportRange(fps0), method0 = fastRenderChoice();
   const cost4k = (() => {                       // what 4K adds over the recommended size, shown before it's picked
     const m4 = xsMinutes(2160, range0.frames, method0), mr = xsMinutes(rec, range0.frames, method0);
-    const s4 = xsRoughSize(2160, fps0, range0.dur, sp0), sr = xsRoughSize(rec, fps0, range0.dur, sp0);
+    const size = (q) => method0 && method0.fast ? xsFastSize(q, fps0, range0.dur) : xsRoughSize(q, fps0, range0.dur, sp0);
+    const s4 = size(2160), sr = size(rec);
     const bits = [];
     if (m4 != null && mr != null && m4 > mr) bits.push(`about ${Math.max(1, Math.round(m4 - mr))} min longer`);
     if (s4 > sr) bits.push(`about ${Delivery.fmtBytes(s4 - sr)} bigger`);
