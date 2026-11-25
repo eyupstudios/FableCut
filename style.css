@@ -4803,3 +4803,5 @@ body.track-size-s .join-btn { width: 14px; height: 14px; margin: -7px 0 0 -7px; 
 .bin-tabs { flex-wrap: wrap; row-gap: 2px; }
 .xf-head .bin-search, .xf-head input[type=number] { background: var(--bg-2, #0b1730); color: inherit; border: 1px solid var(--line, #2a3a5a); border-radius: 6px; padding: 4px 8px; }
 .xf-head .bin-search { width: 100%; }
+
+.xs-why { flex-basis: 100%; margin: 6px 0 0; font-size: 12px; opacity: .8; }

@@ -18294,7 +18294,24 @@ async function seekVideosTo(t, { queueBusy } = {}) {
    there is one set of settings however it was chosen. The simple view has no method choice: it always uses the
    standard (ffmpeg) export, the one that follows every setting. */
 const XS_DEST = [["youtube", "YouTube"], ["youtube-shorts", "Shorts"], ["tiktok", "TikTok"], ["instagram-reels", "Reels"], ["x", "X"]];
-const XS_QUAL = [[1080, "Standard 1080p"], [1440, "High 1440p"], [2160, "Max 4K"]];
+const XS_QUAL = [[1080, "1080p"], [1440, "1440p"], [2160, "4K"]];
+/* 25 Nov 2026 (Steve): "Long videos default to 1440p60, Shorts to 1440x2560 ... 'Recommended' next to the default and a
+   one-line why ('better quality on YouTube'). 4K offered with the extra time and file size shown first." YouTube gives
+   uploads of 1440p and up its better encoding, so they look better even watched at 1080p. TikTok / Reels / X show
+   1080p, so 1080p stays their recommendation. Your own pick is kept (xsQualPicked); until then the recommended one. */
+const XS_RECOMMENDED = { youtube: 1440, "youtube-shorts": 1440, tiktok: 1080, "instagram-reels": 1080, x: 1080 };
+const XS_WHY = { 1440: "better quality on YouTube: it gives 1440p uploads its better encoding", 1080: "what this platform shows" };
+const xsRecommended = (dest) => XS_RECOMMENDED[dest] || 1080;
+/** Minutes of rendering at quality q for the current range (the fast render's own estimate scaled by size, or this
+ *  PC's measured pace) - used to show what 4K costs before it's picked. */
+function xsMinutes(q, frames, method) {
+  if (method && method.fast && method.minutes) {
+    const cur = xsCurrent().q || 1080;
+    return method.minutes * Math.pow(q / cur, 1.2);
+  }
+  const s = exportTimeGuess(frames, q);
+  return s == null ? null : s / 60;
+}
 const xsSize = (dest, q) => {            // the short side is the quality; 16:9 or 9:16 as the platform takes it
   const p = Delivery.PRESETS[dest] || {};
   const long = Math.round((q * 16) / 9 / 2) * 2;
@@ -18435,10 +18452,28 @@ function xsRender() {
   if (!dBox || !qBox || !est) return;
   const cur = xsCurrent();
   const btn = (attr, v, label, on) => `<button type="button" class="xs-btn${on ? " on" : ""}" ${attr}="${v}" aria-pressed="${on ? "true" : "false"}">${escapeHtml(label)}</button>`;
+  // the first time (no size picked yet): the recommended size for where it's going
+  if (cur.dest && cur.q && !getSetting("xsQualPicked") && cur.q !== xsRecommended(cur.dest)) {
+    xsApply(cur.dest, xsRecommended(cur.dest));
+    return;
+  }
+  const rec = xsRecommended(cur.dest || "youtube");
+  const sp0 = dlvSpec, fps0 = (sp0 && sp0.fps) || projectFps(), range0 = exportRange(fps0), method0 = fastRenderChoice();
+  const cost4k = (() => {                       // what 4K adds over the recommended size, shown before it's picked
+    const m4 = xsMinutes(2160, range0.frames, method0), mr = xsMinutes(rec, range0.frames, method0);
+    const s4 = xsRoughSize(2160, fps0, range0.dur, sp0), sr = xsRoughSize(rec, fps0, range0.dur, sp0);
+    const bits = [];
+    if (m4 != null && mr != null && m4 > mr) bits.push(`about ${Math.max(1, Math.round(m4 - mr))} min longer`);
+    if (s4 > sr) bits.push(`about ${Delivery.fmtBytes(s4 - sr)} bigger`);
+    return bits.join(", ");
+  })();
+  const qLabel = (v, label) => v === rec ? `${label} · Recommended` : v === 2160 && cost4k ? `${label} (${cost4k})` : label;
   dBox.innerHTML = XS_DEST.map(([id, label]) => btn("data-dest", id, label, cur.dest === id)).join("");
-  qBox.innerHTML = XS_QUAL.map(([v, label]) => btn("data-q", v, label, cur.q === v)).join("");
-  dBox.querySelectorAll("[data-dest]").forEach((b) => b.addEventListener("click", () => xsApply(b.dataset.dest, cur.q || 1080)));
-  qBox.querySelectorAll("[data-q]").forEach((b) => b.addEventListener("click", () => xsApply(cur.dest || "youtube", +b.dataset.q)));
+  qBox.innerHTML = XS_QUAL.map(([v, label]) => btn("data-q", v, qLabel(v, label), cur.q === v)).join("")
+    + `<p class="xs-why">Recommended: ${rec}p - ${escapeHtml(XS_WHY[rec] || "")}.</p>`;
+  dBox.querySelectorAll("[data-dest]").forEach((b) => b.addEventListener("click", () =>
+    xsApply(b.dataset.dest, getSetting("xsQualPicked") && cur.q ? cur.q : xsRecommended(b.dataset.dest))));
+  qBox.querySelectorAll("[data-q]").forEach((b) => b.addEventListener("click", () => { setSetting("xsQualPicked", true); xsApply(cur.dest || "youtube", +b.dataset.q); }));
   if (!cur.dest || !cur.q) {
     est.textContent = "Custom settings are chosen under Advanced. Pick where it's going and a quality to go back to the simple ones.";
     if ($("xsMethod")) $("xsMethod").textContent = fastRenderChoice().text;

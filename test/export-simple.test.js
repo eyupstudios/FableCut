@@ -26,7 +26,7 @@ test("each destination is a platform preset and each quality a real size for its
   const src = cut("const XS_DEST =", "/** What the simple rows show");
   const { XS_DEST, XS_QUAL, xsSize } = new Function("Delivery", src + "; return { XS_DEST, XS_QUAL, xsSize };")(Delivery);
   assert.deepEqual(XS_DEST.map((d) => d[1]), ["YouTube", "Shorts", "TikTok", "Reels", "X"]);
-  assert.deepEqual(XS_QUAL.map((q) => q[1]), ["Standard 1080p", "High 1440p", "Max 4K"]);
+  assert.deepEqual(XS_QUAL.map((q) => q[1]), ["1080p", "1440p", "4K"]);
   for (const [id] of XS_DEST) assert.ok(Delivery.PRESETS[id], id);
   assert.deepEqual(xsSize("youtube", 1080), { width: 1920, height: 1080 });
   assert.deepEqual(xsSize("youtube", 1440), { width: 2560, height: 1440 });
@@ -59,4 +59,18 @@ test("the simple choice always uses the standard export and the full controls fo
   assert.ok(fn.includes('syncExportChoiceUi("preset")'));
   assert.ok(js.includes('xsApply((project.height | 0) > (project.width | 0) ? "youtube-shorts" : "youtube", 1080);'));
   assert.ok(js.includes("exportPaceRecord(frames, paceQ);"));
+});
+
+
+test("25 Nov: 1440p is recommended for YouTube and Shorts (1440x2560), with the why; 4K shows what it adds first", () => {
+  const src = cut("const XS_DEST =", "/** What the simple rows show");
+  const { XS_RECOMMENDED, XS_WHY, xsSize } = new Function("Delivery", src + "; return { XS_RECOMMENDED, XS_WHY, xsSize };")(Delivery);
+  assert.equal(XS_RECOMMENDED.youtube, 1440);
+  assert.equal(XS_RECOMMENDED["youtube-shorts"], 1440);
+  assert.deepEqual(xsSize("youtube-shorts", 1440), { width: 1440, height: 2560 });
+  assert.equal(XS_RECOMMENDED.tiktok, 1080);                         // TikTok / Reels / X show 1080p
+  assert.match(XS_WHY[1440], /better quality on YouTube/);
+  const r = cut("function xsRender()", "/* The export window always says");
+  assert.ok(r.includes("· Recommended") && r.includes("min longer") && r.includes("bigger") && r.includes('setSetting("xsQualPicked", true)'));
+  assert.ok(r.includes('!getSetting("xsQualPicked") && cur.q !== xsRecommended(cur.dest)'));   // the first time: the recommended size
 });
