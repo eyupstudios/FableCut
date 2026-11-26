@@ -4815,6 +4815,7 @@ function addAdjust() {
   selectClip(c.id); scheduleSave();
 }
 function deleteSelected() {
+  if (typeof shortDeleteSelected === "function" && shortDeleteSelected()) return;   // 26 Nov: a selected Short, never the edit
   const snap = undoSnapshot();
   const { removed, blocked } = EDIT.removeClips(selectedClips());
   if (blocked) toastLocked(removed.length > 0);
@@ -4825,6 +4826,7 @@ function deleteSelected() {
 }
 /** Delete selection and pull later clips left on targeted tracks (per-track ripple). */
 function rippleDeleteSelected() {
+  if (typeof shortDeleteSelected === "function" && shortDeleteSelected()) return;   // 26 Nov: a selected Short, never the edit
   const snap = undoSnapshot();
   const { removed, blocked } = EDIT.rippleDelete(selectedClips());
   if (blocked) toastLocked(removed.length > 0);
@@ -20049,7 +20051,7 @@ els.btnSnap.addEventListener("click", () => {
 els.btnSnapMenu.addEventListener("click", () => openSnapMenu(els.btnSnap));
 els.btnMarkers.addEventListener("click", () => openMarkerList(els.btnMarkers));
 if ($("btnAddShort")) $("btnAddShort").addEventListener("click", () => addShortBox());   // Short boxes (23 Nov)
-if ($("btnExportShorts")) $("btnExportShorts").addEventListener("click", () => exportAllShorts());   // all of them at once
+if ($("btnExportShorts")) $("btnExportShorts").addEventListener("click", () => toggleShortsList());   // 26 Nov: the accepted Shorts list (Export all there)
 if ($("btnThumbFrame")) $("btnThumbFrame").addEventListener("click", () => markThumbFrame());       // thumbnail frame (23 Nov)
 if (els.btnAudioHold) {
   els.btnAudioHold.addEventListener("click", () => setAudioHold(!state.audioHold));

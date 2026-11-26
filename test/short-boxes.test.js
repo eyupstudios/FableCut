@@ -13,6 +13,9 @@ test("a box stays between 15 s and 3 min and never before the start", () => {
   assert.strictEqual(SB.clamp({ start: 5 }, 0).dur, 30);                                       // the default: 30 s
   const n = SB.normalize([{ start: 1, dur: 20 }, null, { start: "x" }, { id: "a", start: 3, dur: 3, name: "Busted" }]);
   assert.deepStrictEqual(n.map((b) => [b.id, b.start, b.dur, b.name]), [["sb1", 1, 20, ""], ["a", 3, 15, "Busted"]]);
+  assert.deepStrictEqual(n.map((b) => [b.cropX, b.accepted]), [[0.5, false], [0.5, false]]);           // 26 Nov: frame centred, not accepted
+  const k = SB.normalize([{ start: 1, dur: 20, cropX: 1.7, accepted: true }, { start: 1, dur: 20, cropX: 0.2, accepted: "yes" }]);
+  assert.deepStrictEqual(k.map((b) => [b.cropX, b.accepted]), [[1, true], [0.2, false]]);
 });
 
 test("the footage under a box: the lowest video lane, cut to the box; titles are counted, not included", () => {
@@ -36,11 +39,39 @@ test("the editor draws, saves and sends the boxes without touching the edit", ()
   assert.ok(app.includes("paintShortBoxes()") && app.includes("ShortBoxes.normalize(data.shortBoxes)") && app.includes("shortBoxes: project.shortBoxes"));
   assert.ok(src.includes('type: "make-short"') && src.includes(">Export</button>") && src.includes(">Download</button>") && !/project\.clips\s*=/.test(src));   // never edits clips
   // 23 Nov (2): Export Shorts (N) for all of them; a box goes once its Short is made (Create Summat says so)
-  assert.ok(html.includes('id="btnExportShorts"') && app.includes("exportAllShorts()") && src.includes("Export Shorts (${ready})"));
+  // 26 Nov: the top-bar button is the list of accepted Shorts, with Export all in it
+  assert.ok(html.includes('id="btnExportShorts"') && app.includes("toggleShortsList()") && src.includes("Export all (") && src.includes("Shorts (${acc.length})"));
   assert.ok(src.includes('d.type === "short-done"') && src.includes("project.shortBoxes = boxes.filter((x) => x.id !== d.box)") && src.includes("box: { id: b.id"));
 });
 
 test("clips under a box can still be clicked: only its bar and handles take the mouse", () => {
   const css = fs.readFileSync(path.join(__dirname, "..", "style.css"), "utf8");
   assert.ok(/\.short-box \{[^}]*pointer-events: none/.test(css) && /\.short-box \.sb-bar, \.short-box \.sb-h \{ pointer-events: auto/.test(css));
+});
+
+test("26 Nov: + Short ENDS at the playhead (the 30 s before it), or covers In to Out", () => {
+  assert.deepStrictEqual(SB.forPlayhead(100, null, null, 600), { start: 70, dur: 30, from: "playhead" });
+  assert.deepStrictEqual(SB.forPlayhead(20, null, null, 600), { start: 0, dur: 20, from: "playhead" });      // near the start
+  assert.deepStrictEqual(SB.forPlayhead(5, null, null, 600), { start: 0, dur: 15, from: "playhead" });       // 15 s at least
+  assert.deepStrictEqual(SB.forPlayhead(100, 40, 95, 600), { start: 40, dur: 55, from: "io" });              // In and Out win
+  assert.deepStrictEqual(SB.forPlayhead(100, 0, 300, 600), { start: 120, dur: 180, from: "io" });            // 3 min: the last 3 before Out
+  assert.deepStrictEqual(SB.forPlayhead(100, 40, null, 600).from, "playhead");                              // only In: the playhead
+});
+
+test("26 Nov: Short mode - the 9:16 frame, its length, and the delete words", () => {
+  assert.deepStrictEqual(SB.window916(1920, 1080, 0.5), { x: 656, w: 608 });
+  assert.deepStrictEqual(SB.window916(1920, 1080, 0), { x: 0, w: 608 });
+  assert.deepStrictEqual(SB.window916(1920, 1080, 1), { x: 1312, w: 608 });
+  assert.strictEqual(SB.length(30), "0:30"); assert.strictEqual(SB.length(125), "2:05");
+  assert.strictEqual(SB.deleteText(1, ""), "Delete Short 1 (the marker only, your video and edit stay)");
+  const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  const src = fs.readFileSync(path.join(__dirname, "..", "short-boxes.js"), "utf8");
+  // the main Delete / Ripple delete (button and keys) go to the selected Short first, never the edit
+  for (const fn of ["deleteSelected", "rippleDeleteSelected"]) {
+    const at = app.indexOf("function " + fn + "() {");
+    assert.ok(at > 0 && app.slice(at, at + 200).includes("if (typeof shortDeleteSelected === \"function\" && shortDeleteSelected()) return;"), fn);
+  }
+  assert.ok(src.includes('window.addEventListener("keydown"') && src.includes("stopImmediatePropagation(); askDelete(selId)") && src.includes('e.key === "Escape"'));
+  assert.ok(src.includes("crop_x: SBX.cropOf(b)") && src.includes('type: "shorts-list"') && src.includes('d.type === "short-removed"'));
+  assert.ok(!/project.clipss*=/.test(src));                                                       // the edit is never changed
 });
