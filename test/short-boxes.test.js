@@ -37,10 +37,13 @@ test("the editor draws, saves and sends the boxes without touching the edit", ()
   const src = fs.readFileSync(path.join(__dirname, "..", "short-boxes.js"), "utf8");
   assert.ok(html.includes('id="btnAddShort"') && html.includes('src="short-boxes.js"'));
   assert.ok(app.includes("paintShortBoxes()") && app.includes("ShortBoxes.normalize(data.shortBoxes)") && app.includes("shortBoxes: project.shortBoxes"));
-  assert.ok(src.includes('type: "make-short"') && src.includes(">Export</button>") && src.includes(">Download</button>") && !/project\.clips\s*=/.test(src));   // never edits clips
+  assert.ok(src.includes('type: "make-short"') && src.includes(">Export to Ready to post</button>") && src.includes(">Download</button>") && !/project\.clips\s*=/.test(src));   // never edits clips
   // 23 Nov (2): Export Shorts (N) for all of them; a box goes once its Short is made (Create Summat says so)
   // 26 Nov: the top-bar button is the list of accepted Shorts, with Export all in it
-  assert.ok(html.includes('id="btnExportShorts"') && app.includes("toggleShortsList()") && src.includes("Export all (") && src.includes("Shorts (${acc.length})"));
+  // 26 Nov (evening): the Shorts tab beside Inspector / Mixer / Color / Transcript; the top-bar button opens it
+  assert.ok(html.includes('id="btnExportShorts"') && app.includes("toggleShortsList()") && src.includes("Export all ticked (") && src.includes("Shorts (${boxes.length})"));
+  assert.ok(html.includes('data-side="shorts"') && html.includes('id="shortsPage"') && app.includes('shorts = tab === "shorts"'));
+  assert.ok(html.includes('id="sbModeSwitch"') && html.includes('data-sbmode="short"') && app.includes("setShortMode(b.dataset.sbmode)"));
   assert.ok(src.includes('d.type === "short-done"') && src.includes("project.shortBoxes = boxes.filter((x) => x.id !== d.box)") && src.includes("box: { id: b.id"));
 });
 
@@ -74,4 +77,19 @@ test("26 Nov: Short mode - the 9:16 frame, its length, and the delete words", ()
   assert.ok(src.includes('window.addEventListener("keydown"') && src.includes("stopImmediatePropagation(); askDelete(selId)") && src.includes('e.key === "Escape"'));
   assert.ok(src.includes("crop_x: SBX.cropOf(b)") && src.includes('type: "shorts-list"') && src.includes('d.type === "short-removed"'));
   assert.ok(!/project.clipss*=/.test(src));                                                       // the edit is never changed
+});
+
+
+test("26 Nov (evening): the frame moves WITH the mouse, the Short's own settings, the start / end fields", () => {
+  // the viewing box over a 1920x1080 picture: 1 screen px = 1 picture px; the box can travel 1920 - 608 = 1312 px
+  assert.ok(SB.dragCrop(0.5, 131.2, 1, 1920, 1080) > 0.5);                  // mouse right -> the box goes right
+  assert.ok(SB.dragCrop(0.5, -131.2, 1, 1920, 1080) < 0.5);                 // mouse left -> the box goes left
+  assert.strictEqual(SB.dragCrop(0.5, 131.2, 1, 1920, 1080), 0.6);
+  assert.strictEqual(SB.dragCrop(0.9, 5000, 1, 1920, 1080), 1);             // never past the edge
+  const n = SB.normalize([{ start: 1, dur: 20, text: "Busted", speed: 1.5, look: "bw" }, { start: 1, dur: 20, speed: 7, look: "x" }]);
+  assert.deepStrictEqual(n.map((b) => [b.text, b.speed, b.look]), [["Busted", 1.5, "bw"], ["", 1, "none"]]);
+  assert.strictEqual(SB.clock(65.2), "1:05.2"); assert.strictEqual(SB.parseClock("1:05.2"), 65.2); assert.ok(isNaN(SB.parseClock("abc")));
+  const src = fs.readFileSync(path.join(__dirname, "..", "short-boxes.js"), "utf8");
+  assert.ok(src.includes("Editing: ${labelOf(b, i)}") && src.includes("switch to Main to change your video"));
+  assert.ok(src.includes("...extras(b)") && !/project.clipss*=/.test(src));   // its own settings go to Create Summat; the edit untouched
 });

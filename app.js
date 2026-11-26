@@ -10242,13 +10242,14 @@ function parseDbInput(s) {
   return Number.isFinite(v) ? clampFaderDb(v) : null;
 }
 function setSideTab(tab) {
-  const mixer = tab === "mixer", color = tab === "color", transcript = tab === "transcript";
+  const mixer = tab === "mixer", color = tab === "color", transcript = tab === "transcript", shorts = tab === "shorts";   // 26 Nov: the Shorts tab
   mixerState.open = mixer;
   colorState.open = color;
   trState.open = transcript;
   for (const b of els.sideTabs.querySelectorAll("[data-side]"))
     b.classList.toggle("on", b.dataset.side === tab);
-  els.inspector.classList.toggle("hidden", mixer || color || transcript);
+  els.inspector.classList.toggle("hidden", mixer || color || transcript || shorts);
+  $("shortsPage")?.classList.toggle("hidden", !shorts);
   els.mixer.classList.toggle("hidden", !mixer);
   els.colorPage.classList.toggle("hidden", !color);
   els.transcriptPage.classList.toggle("hidden", !transcript);
@@ -10256,6 +10257,7 @@ function setSideTab(tab) {
   if (mixer) renderMixer();
   else if (color) renderColorPage(true);
   else if (transcript) renderTranscript(true);
+  else if (shorts) { if (typeof renderShortsPage === "function") renderShortsPage(); }
   else renderInspector();
 }
 /** Write a track's fader / pan, push it into the live graph, persist. */
@@ -20051,7 +20053,8 @@ els.btnSnap.addEventListener("click", () => {
 els.btnSnapMenu.addEventListener("click", () => openSnapMenu(els.btnSnap));
 els.btnMarkers.addEventListener("click", () => openMarkerList(els.btnMarkers));
 if ($("btnAddShort")) $("btnAddShort").addEventListener("click", () => addShortBox());   // Short boxes (23 Nov)
-if ($("btnExportShorts")) $("btnExportShorts").addEventListener("click", () => toggleShortsList());   // 26 Nov: the accepted Shorts list (Export all there)
+if ($("btnExportShorts")) $("btnExportShorts").addEventListener("click", () => toggleShortsList());
+document.querySelectorAll("[data-sbmode]").forEach((b) => b.addEventListener("click", () => setShortMode(b.dataset.sbmode)));   // 26 Nov: Main / Short   // 26 Nov: the accepted Shorts list (Export all there)
 if ($("btnThumbFrame")) $("btnThumbFrame").addEventListener("click", () => markThumbFrame());       // thumbnail frame (23 Nov)
 if (els.btnAudioHold) {
   els.btnAudioHold.addEventListener("click", () => setAudioHold(!state.audioHold));
@@ -22142,7 +22145,7 @@ for (const b of els.sideTabs.querySelectorAll("[data-side]"))
   b.addEventListener("click", () => setSideTab(b.dataset.side));
 try {
   const side = localStorage.getItem(SIDE_TAB_KEY);
-  if (side === "mixer" || side === "color" || side === "transcript") setSideTab(side);
+  if (side === "mixer" || side === "color" || side === "transcript" || side === "shorts") setSideTab(side);
   if (localStorage.getItem(WS_KEY) === "color") setWorkspace("color");
 } catch { }
 connectServer().then(() => { loadLibraryFonts(); runExportJobFromUrl(); });

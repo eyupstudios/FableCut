@@ -171,6 +171,7 @@
           <button class="btn icon" id="btnEnd" title="Go to end (End)">⏭</button>
           <button class="btn icon" id="btnMarkOut" title="Mark Out (O) — Source marks when Source is active; timeline work area in Program">O</button>
           <button class="btn icon toggle" id="btnSpeed" title="Preview speed — how fast the monitor plays while you watch: click to cycle 1×/1.5×/2×/4×. L forward · J reverse (tap again = faster) · K stop. Preview only, never the export (a clip's own speed is in the Inspector)."><span class="btn-cap">Preview speed</span> <span id="btnSpeedRate">1×</span></button>
+          <span class="sb-modesw" id="sbModeSwitch" role="group" aria-label="Edit the main video or the selected Short"><button type="button" class="btn tiny on" data-sbmode="main" aria-pressed="true" title="Edit your video (the main timeline)">Main</button><button type="button" class="btn tiny" data-sbmode="short" aria-pressed="false" title="Edit the selected Short only: its trim, frame, text, speed and look (Esc: back to Main)">Short</button></span>
         </div>
         <div class="transport-end">
           <button type="button" class="btn icon hidden" id="btnInsert" title="Insert Source In→Out at the timeline playhead (,)" aria-label="Insert">
@@ -210,6 +211,7 @@
         <button type="button" data-side="mixer" title="Track and master faders, pan, mute / solo, meters">Mixer</button>
         <button type="button" data-side="color" title="Grade the selected clip: wheels, exposure, white balance, tone">Color</button>
         <button type="button" data-side="transcript" title="The words spoken on the timeline: transcribe, find, and cut by text">Transcript</button>
+        <button type="button" data-side="shorts" title="Your Shorts: preview, export, download, delete, and each one's own settings">Shorts</button>
       </div>
       <div class="inspector-body" id="inspector">
         <div class="inspector-empty">Select a clip to edit its<br>transform, effects &amp; audio.</div>
@@ -217,6 +219,7 @@
       <div class="mixer hidden" id="mixer"></div>
       <div class="color-page hidden" id="colorPage"></div>
       <div class="tr-page hidden" id="transcriptPage"></div>
+      <div class="sb-page hidden" id="shortsPage"></div>
     </aside>
   </div>
 
