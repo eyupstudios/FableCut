@@ -4842,3 +4842,21 @@ body.track-size-s .join-btn { width: 14px; height: 14px; margin: -7px 0 0 -7px; 
 
 /* 26 Nov: the timeline toolbar never pushes its controls (Zoom, Fit) off screen: it wraps on a narrow window */
 .timeline-toolbar { flex-wrap: wrap; row-gap: 4px; }
+
+/* 27 Nov: precise Short start / end - frame steps, typed h:mm:ss.ff, the close-up, Play the cut */
+.sbt-precise { display: flex; flex-direction: column; gap: 6px; grid-column: 1 / -1; }
+.sbt-edge { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px; border-radius: 6px; border: 1px solid transparent; }
+.sbt-edge.on { border-color: #B6F23A; }
+.sbt-edge label { display: flex; align-items: center; gap: 6px; min-width: 150px; }
+.sbt-edge .sbt-tc { width: 104px; font-family: ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
+.sbt-steps { display: flex; flex-wrap: wrap; gap: 3px; }
+.sbt-lenrow { display: flex; align-items: center; gap: 8px; } .sbt-lenrow b { font-family: ui-monospace, Consolas, monospace; }
+.sbt-io { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; }
+.sbt-close { border-radius: 6px; background: rgba(0,0,0,.35); padding: 4px; }
+.sbt-close.idle .sbc-body { display: none; }
+.sbc-head { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-bottom: 3px; } .sbc-head .sbc-info { margin-right: auto; font-variant-numeric: tabular-nums; }
+.sbc-body { position: relative; cursor: crosshair; user-select: none; touch-action: none; }
+.sbc-pics { display: block; width: 100%; height: 44px; object-fit: fill; border-radius: 3px; background: #000; }
+.sbc-wave { display: block; width: 100%; height: 40px; }
+.sbc-dim { position: absolute; top: 0; bottom: 0; background: rgba(0,0,0,.55); pointer-events: none; }
+.sbc-mark { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: #B6F23A; box-shadow: 0 0 0 1px #000; pointer-events: none; }

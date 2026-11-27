@@ -93,3 +93,32 @@ test("26 Nov (evening): the frame moves WITH the mouse, the Short's own settings
   assert.ok(src.includes("Editing: ${labelOf(b, i)}") && src.includes("switch to Main to change your video"));
   assert.ok(src.includes("...extras(b)") && !/project.clipss*=/.test(src));   // its own settings go to Create Summat; the edit untouched
 });
+
+
+test("27 Nov: precise Short edges - h:mm:ss.ff, typed times, frame steps that keep 15 s - 3 min, the footage under an edge", () => {
+  assert.strictEqual(SB.tc(0, 30), "0:00:00.00");
+  assert.strictEqual(SB.tc(3723.5, 30), "1:02:03.15");
+  assert.strictEqual(SB.tc(61 + 14 / 25, 25), "0:01:01.14");
+  assert.strictEqual(SB.parseTc("1:02:03.15", 30), 3723.5);
+  assert.strictEqual(SB.parseTc("2:03", 30), 123);
+  assert.ok(Math.abs(SB.parseTc("0:00:01.99", 25) - (1 + 24 / 25)) < 1e-9);   // past the last frame: the last frame
+  assert.ok(isNaN(SB.parseTc("nope", 30)));
+  const b = { start: 10, dur: 30 };
+  assert.deepStrictEqual(SB.moveEdge(b, "start", 10 + 1 / 30, 600, 30), { start: 10.033, dur: 29.967 });   // one frame on
+  assert.deepStrictEqual(SB.moveEdge(b, "end", 40 - 1 / 30, 600, 30), { start: 10, dur: 29.967 });
+  assert.deepStrictEqual(SB.moveEdge(b, "start", 30, 600, 30), { start: 25, dur: 15 });       // 15 s at least: the end stays
+  assert.deepStrictEqual(SB.moveEdge(b, "start", -9, 600, 30), { start: 0, dur: 40 });          // never before 0
+  assert.deepStrictEqual(SB.moveEdge(b, "end", 400, 600, 30), { start: 10, dur: 180 });         // 3 min at most
+  assert.deepStrictEqual(SB.moveEdge(b, "end", 400, 50, 30), { start: 10, dur: 40 });           // never past the edit
+  assert.strictEqual(SB.snapTo(1.01, 30), 1);
+  const project = { media: [{ id: "m1", src: "/media/a.mp4" }], clips: [
+    { id: "c1", kind: "video", track: "V2", mediaId: "m1", start: 0, duration: 100, in: 0 },
+    { id: "c2", kind: "video", track: "V1", mediaId: "m1", start: 20, duration: 10, in: 50, props: { speed: 2 } }] };
+  assert.deepStrictEqual((({ src, at, speed, from, to }) => ({ src, at, speed, from, to }))(SB.sourceAt(project, 25)), { src: "/media/a.mp4", at: 60, speed: 2, from: 20, to: 30 });
+  assert.strictEqual(SB.sourceAt(project, 5).clip.id, "c1");
+  assert.strictEqual(SB.sourceAt(project, 200), null);
+  const src = fs.readFileSync(path.join(__dirname, "..", "short-boxes.js"), "utf8");
+  for (const want of ['["-60", "−1 min"]', '["-f", "◀ frame"]', '["60", "+1 min"]', "Play the cut", "In/out preview", "Play around",
+                      "CUT OUT", "/api/frame?src=", "wavePeaksFor", 'e.key === "ArrowLeft"', "SBX.parseTc(v, fpsNow())", "playLoop"])
+    assert.ok(src.includes(want), want);
+});

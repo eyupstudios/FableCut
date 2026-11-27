@@ -21,6 +21,12 @@
    Export hands the footage under the Short (and its frame, text, speed and look) to Create Summat, which makes it
    vertical in the background. The main edit is never changed.
 
+   PRECISE (27 Nov, Steve + two creators): the selected Short's start and end show as h:mm:ss.ff (ff = the frame) and
+   can be typed; each steps by a frame, 1 s or 1 min (buttons; ← → a frame and Shift+← → 1 s for the edge last
+   grabbed); grabbing an edge shows a close-up of that spot (pictures + the sound's waveform, zoomable; click it to
+   put the edge on the exact frame); Play the cut loops just the Short, with an in/out preview (1 s before and after,
+   shown as CUT OUT); Play around plays 1 s either side of one edge.
+
    Kept in the project as `shortBoxes: [{id, start, dur, name?, cropX?, accepted?, text?, speed?, look?}]`. The pure
    part is ShortBoxes.* and is tested on its own. */
 (function (root, factory) {
@@ -85,6 +91,48 @@
     return m ? (+(m[1] || 0)) * 60 + +m[2] : NaN;
   }
 
+  /** 27 Nov: h:mm:ss.ff (ff = the frame within the second) <-> seconds. Typing: "1:02:03.15", "2:03.15", "2:03",
+   *  "75", "75.12" (after the dot = frames). */
+  function tc(t, fps) {
+    fps = +fps > 0 ? +fps : 30;
+    const n = Math.max(0, Math.round((+t || 0) * fps)), s = Math.floor(n / fps + 1e-9), ff = Math.max(0, n - Math.round(s * fps));
+    return Math.floor(s / 3600) + ":" + String(Math.floor((s % 3600) / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0") + "." + String(ff).padStart(2, "0");
+  }
+  function parseTc(str, fps) {
+    fps = +fps > 0 ? +fps : 30;
+    const m = String(str || "").trim().match(/^(?:(\d+):)?(?:(\d+):)?(\d+)(?:[.,](\d+))?$/);
+    if (!m) return NaN;
+    let s = 0;
+    for (const x of [m[1], m[2], m[3]].filter((x) => x != null)) s = s * 60 + +x;
+    return s + (m[4] ? Math.min(+m[4], Math.ceil(fps) - 1) / fps : 0);
+  }
+  function snapTo(t, fps) { fps = +fps > 0 ? +fps : 30; return Math.round((+t || 0) * fps) / fps; }
+
+  /** One edge of a box put at time `to` (on a frame); the other edge stays. 15 s to 3 min, never before 0, never past
+   *  the end of the edit. */
+  function moveEdge(box, edge, to, timelineEnd, fps) {
+    const s0 = +box.start, e0 = +box.start + +box.dur;
+    let s = s0, e = e0;
+    if (edge === "start") s = Math.max(0, e0 - MAX, Math.min(snapTo(to, fps), e0 - MIN));
+    else {
+      e = Math.min(Math.max(snapTo(to, fps), s0 + MIN), s0 + MAX);
+      if (timelineEnd > 0) e = Math.min(e, Math.max(s0 + MIN, timelineEnd));
+    }
+    return { ...box, start: Math.round(s * 1000) / 1000, dur: Math.round((e - s) * 1000) / 1000 };
+  }
+
+  /** What is under timeline time `t` on the lowest video lane: {src, at (the time in that file), speed, from, to (the
+   *  clip on the timeline)} - the close-up's pictures and waveform come from it. null: no footage there. */
+  function sourceAt(project, t) {
+    const media = new Map((project.media || []).map((m) => [m.id, m]));
+    const c = (project.clips || []).filter((c) => !c.disabled && c.kind === "video" && /^V\d+$/.test(c.track || "")
+      && c.start <= t && t < c.start + c.duration).sort((x, y) => +x.track.slice(1) - +y.track.slice(1))[0];
+    const m = c && media.get(c.mediaId);
+    if (!m || !m.src) return null;
+    const sp = (c.props && +c.props.speed) || 1;
+    return { clip: c, mediaId: m.id, src: m.src, at: +(c.in + (t - c.start) * sp).toFixed(4), speed: sp, from: c.start, to: c.start + c.duration };
+  }
+
   /** The 9:16 window over a picture `w` x `h` at frame position `cropX`: {x, w} in the picture's pixels. */
   function window916(w, h, cropX) {
     const fw = Math.min(w, Math.round(h * 9 / 16));
@@ -132,7 +180,7 @@
   }
 
   return { MIN, MAX, DEFAULT, SPEEDS, LOOKS, clamp, normalize, forPlayhead, length, clock, parseClock, window916, dragCrop,
-           deleteText, footage, cropOf };
+           deleteText, footage, cropOf, tc, parseTc, snapTo, moveEdge, sourceAt };
 });
 
 /* -- the editor side (only in a browser with the editor loaded) ------------------------------------------------- */
@@ -145,6 +193,12 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   let playRate0 = null;      // the preview speed before a Short's own speed played
   let raf = 0;
   let showMain = true;       // the small main picture in Short mode
+  let edge = null;           // 27 Nov: "start" / "end" - the edge last grabbed (← → move it)
+  let sspan = 6;             // the close-up: seconds across
+  let ioPreview = false;     // Play the cut: 1 s before and after too
+  let playFrom = null, playLoop = false;   // Play the cut loops; Play around plays once
+  const fpsNow = () => (typeof projectFps === "function" ? projectFps() : +project.fps || 30) || 30;
+  const STEPS = [["-60", "−1 min"], ["-1", "−1 s"], ["-f", "◀ frame"], ["f", "frame ▶"], ["1", "+1 s"], ["60", "+1 min"]];
   try { showMain = localStorage.getItem("fc.shortShowMain") !== "0"; } catch { /* only a remembered choice */ }
 
   const making = new Map();  // Shorts being made right now (box id -> "making"): runtime only
@@ -199,13 +253,13 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
           `<input class="sbt-name" data-f="name" value="${escapeHtmlSb(b.name)}" placeholder="${escapeHtmlSb(name)}" maxlength="80">` +
           `<span class="sbt-len">${SBX.length(b.dur)}</span></div>` +
           (on ? `<div class="sbt-grid">` +
-            `<label>Start<input data-f="start" value="${SBX.clock(b.start)}"></label><label>End<input data-f="end" value="${SBX.clock(b.start + b.dur)}"></label>` +
+            preciseHtml(b) +
             `<label class="wide">Frame <span class="dim">(left … right)</span><input type="range" data-f="cropX" min="0" max="1" step="0.01" value="${b.cropX}"></label>` +
             `<label class="wide">On-screen text <span class="dim">(this Short only)</span><input data-f="text" value="${escapeHtmlSb(b.text)}" maxlength="80" placeholder="e.g. BUSTED"></label>` +
             `<label>Speed<select data-f="speed">${SBX.SPEEDS.map((s) => `<option value="${s}" ${s === b.speed ? "selected" : ""}>${s}×</option>`).join("")}</select></label>` +
             `<label>Look<select data-f="look">${Object.entries(SBX.LOOKS).map(([k, [n]]) => `<option value="${k}" ${k === b.look ? "selected" : ""}>${n}</option>`).join("")}</select></label></div>` : "") +
           `<div class="sbt-acts">` + (busy ? `<span class="sb-busy">Making…</span>` :
-            `<button type="button" class="btn tiny" data-sbt="preview">${on && playEnd != null && state.playing ? "❚❚ Pause" : "▶ Preview"}</button>` +
+            `<button type="button" class="btn tiny" data-sbt="preview" title="Loops just this Short until you press Stop${on && ioPreview ? " (with 1 s before and after: In/out preview)" : ""}">${on && playEnd != null && state.playing && playLoop ? "■ Stop" : "▶ Play the cut"}</button>` +
             `<button type="button" class="btn tiny accent" data-sbt="export" title="Make it vertical and open its Ready to post page (in the background)">Export to Ready to post</button>` +
             `<button type="button" class="btn tiny" data-sbt="download">Download</button>`) +
             `<button type="button" class="btn tiny sb-bin" data-sbt="delete" title="${escapeHtmlSb(SBX.deleteText(i + 1, b.name))}">🗑 Delete</button></div></div>`;
@@ -218,6 +272,9 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       const all = boxesNow(), i = all.findIndex((y) => y.id === row.dataset.id), b = all[i];
       if (!b) return;
       if (act === "preview") { selectShort(b.id); playShort(); }
+      else if (act === "step") { const [w, d] = x.dataset.v.split(":"); stepEdge(b.id, w, d); }
+      else if (act === "around") playAround(b.id, x.dataset.v);
+      else if (act === "zin" || act === "zout") { sspan = act === "zin" ? Math.max(1, sspan / 2) : Math.min(96, sspan * 2); renderShortsPage(); }
       else if (act === "export") createShortFromBox(b, labelOf(b, i));
       else if (act === "download") downloadShort(b, labelOf(b, i));
       else if (act === "delete") askDelete(b.id);
@@ -226,6 +283,11 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       if (e.target.closest("button, input[type=checkbox]")) return;
       if (row.dataset.id !== selId) selectShort(row.dataset.id);
     }));
+    const io = page.querySelector("[data-io]");
+    if (io) io.onchange = () => { ioPreview = io.checked; };
+    page.querySelectorAll("[data-edge]").forEach((r) => r.addEventListener("pointerdown", () => { if (edge !== r.dataset.edge) { edge = r.dataset.edge; paintClose(); markEdgeRows(); } }));
+    wireClose(page.querySelector(".sbt-close"));
+    paintClose();
     page.querySelectorAll("[data-f]").forEach((inp) => {
       const id = inp.closest(".sbt").dataset.id, f = inp.dataset.f;
       const commit = () => setField(id, f, inp.type === "checkbox" ? inp.checked : inp.value);
@@ -240,12 +302,13 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     if (!b) return;
     const end = typeof projDur === "function" ? projDur() : 0;
     if (f === "start" || f === "end") {
-      const t = SBX.parseClock(v);
-      if (!isFinite(t)) return toast("Write a time like 1:05.2");
+      const t = SBX.parseTc(v, fpsNow());
+      if (!isFinite(t)) { toast("Type the time as h:mm:ss.ff, for example 0:12:34.05 (05 = the 5th frame)"); renderShortsPage(); return; }
       const s = f === "start" ? t : b.start, e = f === "end" ? t : b.start + b.dur;
       if (e - s < SBX.MIN || e - s > SBX.MAX) toast(`A Short is ${SBX.MIN} s to ${SBX.MAX / 60} min: kept inside that`);
-      const ns = f === "start" ? Math.min(s, e - SBX.MIN) : s;
-      Object.assign(b, SBX.clamp({ ...b, start: ns, dur: e - ns }, end));
+      edge = f;
+      Object.assign(b, SBX.moveEdge(b, f, t, end, fpsNow()));
+      showEdge(b);
     } else if (f === "accepted") b.accepted = !!v;
     else if (f === "cropX") b.cropX = Math.min(1, Math.max(0, +v));
     else if (f === "speed") b.speed = +v;
@@ -256,6 +319,134 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     sendList();
     if (f !== "cropX" && f !== "text" && f !== "name") renderShortsPage();
     paintShortBoxes(true);
+  }
+
+  /* -- 27 Nov: precise start / end ----------------------------------------------------------------------------------- */
+  function preciseHtml(b) {
+    const fps = fpsNow();
+    const row = (w, name, t) => `<div class="sbt-edge${edge === w ? " on" : ""}" data-edge="${w}"><label>${name}<input data-f="${w}" class="sbt-tc" value="${SBX.tc(t, fps)}" spellcheck="false" title="Type a time: h:mm:ss.ff (ff = the frame), then Enter"></label>` +
+      `<span class="sbt-steps">${STEPS.map(([d, l]) => `<button type="button" class="btn tiny" data-sbt="step" data-v="${w}:${d}" title="${d.includes("f") ? "One frame" + (d[0] === "-" ? " back" : " on") + " (← →)" : l + (Math.abs(+d) === 1 ? " (Shift + ← →)" : "")}">${l}</button>`).join("")}` +
+      `<button type="button" class="btn tiny" data-sbt="around" data-v="${w}" title="Plays 1 second before to 1 second after the ${name.toLowerCase()}: what is not in the Short shows as CUT OUT">Play around</button></span></div>`;
+    return `<div class="sbt-precise wide">${row("start", "Start", b.start)}${row("end", "End", b.start + b.dur)}` +
+      `<div class="sbt-lenrow">Length <b class="sbt-tclen">${SBX.tc(b.dur, fps)}</b><label class="sbt-io" title="Play the cut also plays 1 s before the start and 1 s after the end, shown as CUT OUT"><input type="checkbox" data-io ${ioPreview ? "checked" : ""}> In/out preview</label></div>` +
+      `<div class="sbt-close" title="Close-up of the edge you last grabbed: click or drag to put it on the exact frame">` +
+      `<div class="sbc-head"><b class="sbc-name"></b><span class="dim sbc-info"></span><button type="button" class="btn tiny" data-sbt="zin" title="Closer (fewer seconds across)">+</button><button type="button" class="btn tiny" data-sbt="zout" title="Wider (more seconds across)">−</button></div>` +
+      `<div class="sbc-body"><img class="sbc-pics" alt="" draggable="false"><canvas class="sbc-wave" height="40"></canvas><i class="sbc-dim"></i><i class="sbc-mark"></i></div></div></div>`;
+  }
+  function markEdgeRows() {
+    document.querySelectorAll("#shortsPage .sbt-edge").forEach((r) => r.classList.toggle("on", r.dataset.edge === edge));
+  }
+  /** After an edge moved: its new times in the tab (not re-rendered while typing), the band, the close-up, and the
+   *  playhead on that edge's frame (the start's first frame / the end's last frame) so the monitor shows it. */
+  function showEdge(b) {
+    const fps = fpsNow(), page = document.getElementById("shortsPage");
+    if (page) {
+      const row = page.querySelector(`.sbt[data-id="${b.id}"]`);
+      if (row) {
+        for (const w of ["start", "end"]) { const el = row.querySelector(`input[data-f="${w}"]`); if (el && document.activeElement !== el) el.value = SBX.tc(w === "start" ? b.start : b.start + b.dur, fps); }
+        const L = row.querySelector(".sbt-tclen"); if (L) L.textContent = SBX.tc(b.dur, fps);
+        const l2 = row.querySelector(".sbt-len"); if (l2) l2.textContent = SBX.length(b.dur);
+      }
+    }
+    if (edge && typeof setTime === "function") setTime(edge === "start" ? b.start : Math.max(b.start, b.start + b.dur - 1 / fps));
+    markEdgeRows();
+    paintClose();
+  }
+  function stepEdge(id, w, d) {
+    const all = boxesNow(), b = all.find((x) => x.id === id);
+    if (!b) return;
+    stopShortPlay();
+    const fps = fpsNow(), cur = w === "start" ? b.start : b.start + b.dur;
+    const to = d === "f" ? cur + 1 / fps : d === "-f" ? cur - 1 / fps : cur + +d;
+    edge = w;
+    if (typeof pushUndo === "function") pushUndo();
+    Object.assign(b, SBX.moveEdge(b, w, to, typeof projDur === "function" ? projDur() : 0, fps));
+    project.shortBoxes = all;
+    scheduleSave();
+    sendList();
+    paintShortBoxes(true);
+    showEdge(b);
+  }
+  window.shortStepEdge = (w, d) => { if (selId) stepEdge(selId, w, d); };
+
+  /** The close-up: pictures (the Editor's own frame sheet of the file under the edge) and that file's waveform,
+   *  `sspan` seconds across, centred on the edge; dimmed on the side that is not in the Short. */
+  let closeWin = null;
+  function closeWindow(b) {
+    const t = edge === "end" ? b.start + b.dur : b.start;
+    const src = SBX.sourceAt(project, edge === "end" ? Math.max(0, t - 1e-3) : t);
+    if (!src) return { t, src: null };
+    const t0 = Math.max(src.from, t - sspan / 2), t1 = Math.min(src.to, t0 + sspan);
+    return { t, src, t0, t1 };
+  }
+  function paintClose() {
+    const [b] = current(), box = document.querySelector("#shortsPage .sbt.on .sbt-close");
+    if (!box || !b) return;
+    if (!edge) { box.classList.add("idle"); box.querySelector(".sbc-name").textContent = "Close-up"; box.querySelector(".sbc-info").textContent = "grab the start or the end (here or on the band) to see that spot frame by frame"; return; }
+    box.classList.remove("idle");
+    const fps = fpsNow(), w = closeWindow(b);
+    box.querySelector(".sbc-name").textContent = edge === "start" ? "Start" : "End";
+    if (!w.src) { box.querySelector(".sbc-info").textContent = `${SBX.tc(w.t, fps)} · no footage under this edge`; return; }
+    // the window is only moved when the edge leaves its middle, so frame steps don't reload the pictures
+    if (!closeWin || closeWin.src.src !== w.src.src || closeWin.span !== sspan || closeWin.edge !== edge || w.t < closeWin.t0 + sspan * 0.2 && closeWin.t0 > w.src.from || w.t > closeWin.t1 - sspan * 0.2 && closeWin.t1 < w.src.to) closeWin = { ...w, span: sspan, edge };
+    const cw = closeWin, sp = cw.src.speed, a0 = cw.src.at + (cw.t0 - cw.t) * sp, a1 = cw.src.at + (cw.t1 - cw.t) * sp;
+    const img = box.querySelector(".sbc-pics"), url = `/api/frame?src=${encodeURIComponent(cw.src.src)}&frames=8&cols=8&from=${a0.toFixed(3)}&to=${a1.toFixed(3)}&w=120&q=6`;
+    if (img.dataset.url !== url) { img.dataset.url = url; img.src = url; }
+    const S = (x) => Math.max(0, Math.min(100, ((x - cw.t0) / (cw.t1 - cw.t0)) * 100));
+    box.querySelector(".sbc-mark").style.left = S(w.t) + "%";
+    const dim = box.querySelector(".sbc-dim");
+    if (edge === "start") { dim.style.left = "0"; dim.style.width = S(w.t) + "%"; } else { dim.style.left = S(w.t) + "%"; dim.style.width = (100 - S(w.t)) + "%"; }
+    box.querySelector(".sbc-info").textContent = `${SBX.tc(w.t, fps)} · ${(cw.t1 - cw.t0).toFixed(1)} s across · ${Math.round(fps * 100) / 100} fps`;
+    const c = box.querySelector(".sbc-wave"), W = c.clientWidth || 300; c.width = W;
+    const g = c.getContext("2d"), H = c.height;
+    g.clearRect(0, 0, W, H);
+    const pk = typeof wavePeaksFor === "function" ? wavePeaksFor(cw.src.clip) : null, per = typeof WAVE_PEAKS_PER_SEC === "number" ? WAVE_PEAKS_PER_SEC : 50;
+    if (pk && pk.length) {
+      g.fillStyle = "#B6F23A";
+      for (let x = 0; x < W; x++) {
+        const ta = a0 + (x / W) * (a1 - a0), tb = a0 + ((x + 1) / W) * (a1 - a0);
+        let v = 0; for (let k = Math.floor(ta * per); k <= Math.floor(tb * per) && k < pk.length; k++) if (k >= 0 && pk[k] > v) v = pk[k];
+        const bh = Math.max(1, Math.min(1, v) * (H - 2)); g.fillRect(x, (H - bh) / 2, 1, bh);
+      }
+    } else { g.fillStyle = "rgba(255,255,255,.4)"; g.font = "11px sans-serif"; g.fillText("the waveform shows once the Editor has read this file's sound", 6, H / 2 + 4); }
+    const pxf = W / ((cw.t1 - cw.t0) * fps);
+    if (pxf >= 5) { g.fillStyle = "rgba(255,255,255,.35)"; for (let f = Math.ceil(cw.t0 * fps); f / fps <= cw.t1; f++) g.fillRect(((f / fps - cw.t0) / (cw.t1 - cw.t0)) * W, 0, 1, 5); }
+  }
+  function wireClose(box) {
+    if (!box) return;
+    const body = box.querySelector(".sbc-body");
+    body.onpointerdown = (e) => {
+      const [b] = current();
+      if (!b || !edge || !closeWin) return;
+      e.preventDefault(); e.stopPropagation();
+      stopShortPlay();
+      const r = body.getBoundingClientRect(), cw = closeWin;
+      if (typeof pushUndo === "function") pushUndo();
+      const at = (ev) => cw.t0 + Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)) * (cw.t1 - cw.t0);
+      const move = (ev) => update((x) => { Object.assign(x, SBX.moveEdge(x, edge, at(ev), typeof projDur === "function" ? projDur() : 0, fpsNow())); showEdge(x); paintShortBoxes(true); });
+      move(e);
+      const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); sendList(); };
+      window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+    };
+  }
+  function playAround(id, w) {
+    const b = boxesNow().find((x) => x.id === id);
+    if (!b) return;
+    if (selId !== id) selectShort(id);
+    edge = w; markEdgeRows(); paintClose();
+    const t = w === "start" ? b.start : b.start + b.dur;
+    startRange(Math.max(0, t - 1), t + 1, false);
+  }
+  function startRange(from, to, loop) {
+    if (state.playing && typeof pause === "function") pause();
+    if (typeof setTime === "function") setTime(from); else state.time = from;
+    playFrom = from; playEnd = to; playLoop = loop;
+    const [b] = current();
+    playRate0 = state.previewRate;
+    state.previewRate = (b && b.speed) || 1;
+    if (typeof play === "function") play();
+    drawStageButtons();
+    renderShortsPage();
   }
 
   /* -- delete: always the same question; never the edit ----------------------------------------------------------- */
@@ -282,7 +473,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   /* -- Short mode: the monitor shows the Short, edits go to it only --------------------------------------------------- */
   function selectShort(id) {
     if (!boxesNow().some((b) => b.id === id)) return;
-    if (selId !== id) { stopShortPlay(); selId = id; }
+    if (selId !== id) { stopShortPlay(); selId = id; edge = null; closeWin = null; }
     if (typeof setSelection === "function" && state.selIds && state.selIds.size) setSelection([]);   // Delete never hits a clip now
     document.body.classList.add("short-mode");
     syncModeSwitch();
@@ -297,7 +488,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   function leaveShortMode() {
     if (!selId) return;
     stopShortPlay();
-    selId = null;
+    selId = null; edge = null; closeWin = null;
     document.body.classList.remove("short-mode");
     document.getElementById("shortStage")?.remove();
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
@@ -338,23 +529,20 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     scheduleSave();
   }
 
+  /** Play the cut (27 Nov): loops just this Short until Stop (at its own speed); In/out preview adds 1 s before the
+   *  start and 1 s after the end, shown as CUT OUT. */
   function playShort() {
     const [b] = current();
     if (!b) return;
-    if (playEnd != null && state.playing) { stopShortPlay(); return; }
-    if (typeof setTime === "function") setTime(b.start); else state.time = b.start;
-    playEnd = b.start + b.dur;
-    playRate0 = state.previewRate;
-    state.previewRate = b.speed || 1;                     // its own speed while it plays
-    if (typeof play === "function") play();
-    drawStageButtons();
-    renderShortsPage();
+    if (playEnd != null && state.playing) { stopShortPlay(); renderShortsPage(); return; }
+    const end = typeof projDur === "function" ? projDur() : 0;
+    startRange(ioPreview ? Math.max(0, b.start - 1) : b.start, ioPreview ? (end > 0 ? Math.min(end, b.start + b.dur + 1) : b.start + b.dur + 1) : b.start + b.dur, true);
   }
   window.playShort = playShort;
   function stopShortPlay() {
     if (playEnd != null && state.playing && typeof pause === "function") pause();
     if (playRate0 != null) { state.previewRate = playRate0; playRate0 = null; }
-    playEnd = null;
+    playEnd = null; playFrom = null; playLoop = false;
     drawStageButtons();
   }
 
@@ -389,7 +577,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   }
   function drawStageButtons() {
     const btn = document.getElementById("ssPlay");
-    if (btn) btn.textContent = playEnd != null && state.playing ? "❚❚ Pause" : "▶ Play Short";
+    if (btn) btn.textContent = playEnd != null && state.playing ? "■ Stop" : "▶ Play the cut";
   }
   /** Sizes from the monitor area itself: the 9:16 preview as tall as fits, the main picture 30 % of the width. */
   function fitStage() {
@@ -430,7 +618,10 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     if (!b) return;
     if (playEnd != null) {
       if (!state.playing) { stopShortPlay(); renderShortsPage(); }
-      else if (state.time >= playEnd - 0.01) { stopShortPlay(); renderShortsPage(); }
+      else if (state.time >= playEnd - 0.01) {
+        if (playLoop && playFrom != null) { const f = playFrom; pause(); setTime(f); play(); }   // Play the cut: again
+        else { stopShortPlay(); renderShortsPage(); }
+      }
     }
     const src = els.preview, cv = document.getElementById("shortPreview"), mc = document.getElementById("ssMain");
     if (src && src.width && src.height) {
@@ -447,6 +638,11 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
           while (fs > 24 && g.measureText(t).width > cv.width - 80) { fs -= 4; g.font = `900 ${fs}px Anton, Impact, sans-serif`; }
           g.textAlign = "center"; g.lineJoin = "round"; g.lineWidth = Math.max(4, fs / 9); g.strokeStyle = "#0b0b10"; g.fillStyle = "#ffffff";
           g.strokeText(t, cv.width / 2, cv.height * 0.2); g.fillText(t, cv.width / 2, cv.height * 0.2);
+        }
+        if (playEnd != null && state.playing && (state.time < b.start - 0.01 || state.time > b.start + b.dur + 0.01)) {   // in/out preview
+          g.fillStyle = "rgba(0,0,0,.45)"; g.fillRect(0, 0, cv.width, cv.height);
+          g.font = "900 64px Anton, Impact, sans-serif"; g.textAlign = "center"; g.fillStyle = "#E5484D";
+          g.fillText("CUT OUT", cv.width / 2, cv.height / 2);
         }
       }
       if (mc && showMain) {
@@ -470,7 +666,11 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   window.addEventListener("keydown", (e) => {
     if (!selId) return;
     const typing = typeof isTypingTarget === "function" && isTypingTarget(document.activeElement);
-    if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); leaveShortMode(); }
+    if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); if (edge) { edge = null; markEdgeRows(); paintClose(); } else leaveShortMode(); }
+    else if (!typing && edge && (e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault(); e.stopImmediatePropagation();               // 27 Nov: the grabbed edge, a frame (Shift: 1 s)
+      stepEdge(selId, edge, (e.key === "ArrowLeft" ? "-" : "") + (e.shiftKey ? "1" : "f"));
+    }
     else if (!typing && (e.key === "Delete" || e.key === "Backspace") && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault(); e.stopImmediatePropagation(); askDelete(selId);
     } else if (!typing && !e.altKey && ((!e.ctrlKey && !e.metaKey && MAIN_EDIT_KEYS.has(e.key) && !/^[xXvV]$/.test(e.key))
@@ -565,22 +765,25 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
         el.setPointerCapture(e.pointerId);
         const x0 = e.clientX, s0 = b.start, d0 = b.dur, end = typeof projDur === "function" ? projDur() : 0;
         let moved = false;
+        if (mode !== "move" && b.id === selId) { edge = mode === "l" ? "start" : "end"; markEdgeRows(); paintClose(); }
         el.onpointermove = (m) => {
           if (!moved && Math.abs(m.clientX - x0) < 3) return;         // a click, not a drag (yet)
           const dt = (m.clientX - x0) / state.pps;
-          let nb = mode === "move" ? { ...b, start: s0 + dt } : mode === "l" ? { ...b, start: Math.min(s0 + dt, s0 + d0 - SBX.MIN), dur: d0 - Math.min(dt, d0 - SBX.MIN) } : { ...b, dur: d0 + dt };
-          if (mode === "l" && nb.dur > SBX.MAX) { nb.start = s0 + d0 - SBX.MAX; nb.dur = SBX.MAX; }
-          nb = SBX.clamp(nb, end);
+          const fps = fpsNow();
+          let nb = mode === "move" ? SBX.clamp({ ...b, start: SBX.snapTo(s0 + dt, fps) }, end)
+            : SBX.moveEdge({ ...b, start: s0, dur: d0 }, mode === "l" ? "start" : "end", mode === "l" ? s0 + dt : s0 + d0 + dt, end, fps);   // 27 Nov: on frames
           if (!moved && typeof pushUndo === "function") pushUndo();
           moved = true;
           Object.assign(b, nb);
           el.style.left = b.start * state.pps + "px"; el.style.width = Math.max(12, b.dur * state.pps) + "px";
           el.querySelector(".sb-name").textContent = `${label} · ${SBX.length(b.dur)}${b.accepted ? " ✓" : ""}`;
+          if (mode !== "move" && b.id === selId) showEdge(b);
         };
         el.onpointerup = () => {
           el.onpointermove = null;
           if (moved) { project.shortBoxes = boxes; scheduleSave(); sendList(); }
           selectShort(b.id);                                           // a click (or the end of a drag): Short mode
+          if (mode !== "move") { edge = mode === "l" ? "start" : "end"; showEdge(b); }   // 27 Nov: the grabbed edge
           renderShortsPage();
         };
       };
