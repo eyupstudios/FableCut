@@ -4860,3 +4860,21 @@ body.track-size-s .join-btn { width: 14px; height: 14px; margin: -7px 0 0 -7px; 
 .sbc-wave { display: block; width: 100%; height: 40px; }
 .sbc-dim { position: absolute; top: 0; bottom: 0; background: rgba(0,0,0,.55); pointer-events: none; }
 .sbc-mark { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: #B6F23A; box-shadow: 0 0 0 1px #000; pointer-events: none; }
+
+/* 27 Nov: the Shorts tab's ONE bar, Pause / Stop, the frame (Still / Action shot / Follow / keyframes) */
+.sbt-bar { border-radius: 6px; background: rgba(0,0,0,.35); padding: 4px; }
+.sbb-head { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-bottom: 3px; } .sbb-head .sbb-win { margin-right: auto; font-variant-numeric: tabular-nums; }
+.sbb-body { position: relative; cursor: grab; user-select: none; touch-action: none; overflow: hidden; border-radius: 4px; }
+.sbb-thumbs { display: flex; height: 44px; background: #000; } .sbb-thumbs img, .sbb-thumbs .sbb-none { flex: 1 1 0; min-width: 0; height: 44px; object-fit: cover; }
+.sbb-wave { display: block; width: 100%; height: 40px; }
+.sbb-dim { position: absolute; top: 0; bottom: 0; background: rgba(0,0,0,.6); pointer-events: none; } .sbb-dim.l { left: 0; }
+.sbb-h { position: absolute; top: 0; bottom: 0; width: 10px; margin-left: -5px; background: #fff; border-radius: 3px; cursor: ew-resize; z-index: 3; box-shadow: 0 0 0 1px #000; }
+.sbb-h.on { background: #B6F23A; }
+.sbb-play { position: absolute; top: 0; bottom: 0; width: 2px; background: #E5484D; pointer-events: none; z-index: 2; }
+.sbb-key { position: absolute; top: 2px; width: 8px; height: 8px; margin-left: -4px; background: #FFD34D; transform: rotate(45deg); pointer-events: none; z-index: 2; }
+.sbb-key.back { background: #9DC1FF; }
+.sbb-now { font-size: 11px; margin-top: 3px; min-height: 14px; font-variant-numeric: tabular-nums; }
+.sbt-frame { display: flex; flex-direction: column; gap: 4px; grid-column: 1 / -1; }
+.sbf-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; } .sbf-row > b { margin-right: 4px; }
+.sbf-note { font-size: 11px; }
+.sbf-keys { display: flex; flex-wrap: wrap; gap: 4px; font-size: 11px; } .sbf-key { display: inline-flex; align-items: center; gap: 2px; padding: 0 4px; border-radius: 4px; background: rgba(255,255,255,.06); }

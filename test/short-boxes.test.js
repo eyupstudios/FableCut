@@ -118,7 +118,44 @@ test("27 Nov: precise Short edges - h:mm:ss.ff, typed times, frame steps that ke
   assert.strictEqual(SB.sourceAt(project, 5).clip.id, "c1");
   assert.strictEqual(SB.sourceAt(project, 200), null);
   const src = fs.readFileSync(path.join(__dirname, "..", "short-boxes.js"), "utf8");
-  for (const want of ['["-60", "−1 min"]', '["-f", "◀ frame"]', '["60", "+1 min"]', "Play the cut", "In/out preview", "Play around",
+  for (const want of ['["-60", "−1 min"]', '["-f", "◀ frame"]', '["60", "+1 min"]', "Play the cut", "In/out preview", "sbt-bar",
                       "CUT OUT", "/api/frame?src=", "wavePeaksFor", 'e.key === "ArrowLeft"', "SBX.parseTc(v, fpsNow())", "playLoop"])
+    assert.ok(src.includes(want), want);
+});
+// 27 Nov (Steve): ONE bar, Pause / Stop, and the frame (Still / Action shot / Follow this person / keyframes)
+test("the frame rule is exactly Create Summat's (reframe.path): the preview is what the export makes", () => {
+  const ref = require("./frame-ref-27nov.json");
+  for (const k of ["still_keys", "path_keys", "path_only"]) {
+    const c = ref[k].case;
+    const b = { cropX: c.crop, frame: { mode: c.path.length ? "action" : "still", path: c.path, keys: c.keys } };
+    ref.times.forEach((t, i) => assert.ok(Math.abs(SB.frameAt(b, t) - ref[k].crop[i]) < 1e-4, `${k} at ${t}: ${SB.frameAt(b, t)} vs ${ref[k].crop[i]}`));
+  }
+});
+
+test("the frame: still stays put, a path is followed, keyframes glide (eased) and hold, bad data is cleaned", () => {
+  assert.strictEqual(SB.frameAt({ cropX: 0.3 }, 4), 0.3);
+  assert.strictEqual(SB.frameAt({ cropX: 0.3, frame: { mode: "still", path: [[0, 0], [10, 1]] } }, 5), 0.3);   // a still ignores the path
+  assert.ok(Math.abs(SB.frameAt({ cropX: 0.5, frame: { mode: "action", path: [[0, 0], [10, 1]] } }, 5) - 0.5) < 1e-9);
+  const k = { cropX: 0.5, frame: { mode: "still", keys: [{ t: 3, x: 1 }] } };
+  assert.strictEqual(SB.frameAt(k, 2.2), 0.5);                       // the glide starts 0.8 s before the key
+  assert.ok(SB.frameAt(k, 2.6) > 0.5 && SB.frameAt(k, 2.6) < 1);    // gliding
+  assert.strictEqual(SB.frameAt(k, 3), 1); assert.strictEqual(SB.frameAt(k, 9), 1);   // arrives on time, then holds
+  const a = SB.frameAt(k, 2.25) - 0.5, m = SB.frameAt(k, 2.6) - SB.frameAt(k, 2.55);
+  assert.ok(a < m, "eased: slow start, faster middle");
+  const n = SB.normFrame({ mode: "zoom", path: [[0, 2], ["x", 1], [1, -1]], keys: [{ t: 5, x: 9 }, { t: 1 }, { x: 1 }] });
+  assert.deepStrictEqual(n, { mode: "still", path: [[0, 1], [1, 0]], keys: [{ t: 1, x: 0.5, back: false }, { t: 5, x: 1, back: false }], kind: "" });
+  assert.strictEqual(SB.normFrame(null), null);
+  const kept = SB.normalize([{ start: 1, dur: 20, frame: { mode: "follow", path: [[0, 0.4]], keys: [] } }])[0];
+  assert.strictEqual(kept.frame.mode, "follow");
+  assert.strictEqual(SB.normalize([{ start: 1, dur: 20 }])[0].frame, undefined);
+});
+
+test("the Shorts tab: one bar (60 s either side, zoom, Fit), Pause / Resume / Stop, what is playing, the frame buttons", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "short-boxes.js"), "utf8");
+  for (const gone of ["sbt-close", "paintClose", "wireClose", "sspan"]) assert.ok(!src.includes(gone), gone);
+  for (const want of ["const AROUND = 60", "sbb-dim l", "sbb-h s", "sbb-h e", 'data-sbt="bfit"', 'data-sbt="bzin"', "onwheel",
+                      "❚❚ Pause", "▶ Resume", "■ Stop", "ssStop", "Playing", "Paused", "paused: the loop waits",
+                      "Action shot", "Follow this person", "+ Keyframe here", "Back to auto here", '"short-frame"',
+                      "frame: frameOut(b)", "cropNow(b)", "followPick"])
     assert.ok(src.includes(want), want);
 });

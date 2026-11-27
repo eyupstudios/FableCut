@@ -60,7 +60,8 @@
       .map((b, i) => ({ ...clamp(b, 0), id: String(b.id || "sb" + (i + 1)), name: String(b.name || "").slice(0, 80),
         cropX: Math.round(cropOf(b) * 1000) / 1000, accepted: b.accepted === true,
         text: String(b.text || "").slice(0, 80), speed: SPEEDS.includes(+b.speed) ? +b.speed : 1,
-        look: Object.prototype.hasOwnProperty.call(LOOKS, b.look) ? b.look : "none" }))
+        look: Object.prototype.hasOwnProperty.call(LOOKS, b.look) ? b.look : "none",
+        ...(b.frame ? { frame: normFrame(b.frame) } : {}) }))
       .map((b, i, all) => all.findIndex((x) => x.id === b.id) < i ? { ...b, id: b.id + "_" + (i + 1) } : b);   // ids are unique
   }
 
@@ -133,6 +134,55 @@
     return { clip: c, mediaId: m.id, src: m.src, at: +(c.in + (t - c.start) * sp).toFixed(4), speed: sp, from: c.start, to: c.start + c.duration };
   }
 
+  /** 27 Nov (Steve): Action shot / Follow / keyframes. A Short's `frame`: {mode: "still" | "action" | "follow",
+   *  path: [[t, crop], ...] (t = seconds of the Short, crop 0..1 left..right, worked out by Create Summat),
+   *  keys: [{t, x, back}] (x = crop 0..1; back = glide back to the path from here)}. */
+  const FRAME_MODES = ["still", "action", "follow"];
+  const GLIDE = 0.8;                       // s: a keyframe's glide (reframe.py's "medium")
+  function normFrame(f) {
+    if (!f || typeof f !== "object") return null;
+    const mode = FRAME_MODES.includes(f.mode) ? f.mode : "still";
+    const path = (Array.isArray(f.path) ? f.path : []).filter((p) => Array.isArray(p) && isFinite(+p[0]) && isFinite(+p[1]))
+      .slice(0, 6000).map((p) => [+(+p[0]).toFixed(3), Math.min(1, Math.max(0, +p[1]))]);
+    const keys = (Array.isArray(f.keys) ? f.keys : []).filter((k) => k && isFinite(+k.t)).slice(0, 80)
+      .map((k) => ({ t: +(+k.t).toFixed(3), x: Math.min(1, Math.max(0, isFinite(+k.x) ? +k.x : 0.5)), back: k.back === true }))
+      .sort((a, b) => a.t - b.t);
+    return { mode, path, keys, kind: String(f.kind || "").slice(0, 20) };
+  }
+  const easeS = (s) => { s = Math.min(1, Math.max(0, s)); return s * s * (3 - 2 * s); };
+  function interpPath(path, t) {
+    if (!path.length) return null;
+    if (t <= path[0][0]) return path[0][1];
+    if (t >= path[path.length - 1][0]) return path[path.length - 1][1];
+    let lo = 0, hi = path.length - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (path[m][0] <= t) lo = m; else hi = m; }
+    const [t0, c0] = path[lo], [t1, c1] = path[hi];
+    return c0 + (c1 - c0) * (t - t0) / Math.max(1e-9, t1 - t0);
+  }
+  /** Where the 9:16 window is (crop 0..1) at second `t` of the Short - the path (Action shot / Follow) or the fixed
+   *  position, with the keyframes gliding in: each glides (eased, 0.8 s) from wherever the window is to its
+   *  position, arriving at its time, then holds until the next key's glide; a "back" key glides back to the path
+   *  and follows it. EXACTLY reframe.path in Create Summat, so the export is what the preview shows. */
+  function frameAt(b, t) {
+    const f = normFrame(b && b.frame);
+    const fixed = cropOf(b || {});
+    const auto = (x) => (f && f.mode !== "still" && f.path.length ? interpPath(f.path, x) : fixed);
+    const keys = f ? f.keys : [];
+    const val = (n, x) => {                // the window at x, counting the first n keys only
+      let i = -1, g0 = 0;
+      for (let k = n - 1; k >= 0; k--) {
+        const g = Math.max(keys[k].t - GLIDE, k ? keys[k - 1].t : -1e18);
+        if (g <= x) { i = k; g0 = g; break; }
+      }
+      if (i < 0) return auto(x);
+      const k = keys[i], start = val(i, g0);
+      const s = easeS((x - g0) / Math.max(keys[i].t - g0, 1e-6));
+      const target = k.back ? auto(x) : k.x;
+      return Math.min(1, Math.max(0, start + s * (target - start)));
+    };
+    return val(keys.length, t);
+  }
+
   /** The 9:16 window over a picture `w` x `h` at frame position `cropX`: {x, w} in the picture's pixels. */
   function window916(w, h, cropX) {
     const fw = Math.min(w, Math.round(h * 9 / 16));
@@ -180,12 +230,13 @@
   }
 
   return { MIN, MAX, DEFAULT, SPEEDS, LOOKS, clamp, normalize, forPlayhead, length, clock, parseClock, window916, dragCrop,
-           deleteText, footage, cropOf, tc, parseTc, snapTo, moveEdge, sourceAt };
+           deleteText, footage, cropOf, tc, parseTc, snapTo, moveEdge, sourceAt, normFrame, frameAt, interpPath, GLIDE };
 });
 
 /* -- the editor side (only in a browser with the editor loaded) ------------------------------------------------- */
 if (typeof window !== "undefined" && typeof document !== "undefined") {
   const SBX = ShortBoxes;
+  const normFrame = SBX.normFrame;
   const boxesNow = () => SBX.normalize(project.shortBoxes);
   const labelOf = (b, i) => b.name || `Short ${i + 1}`;
   let selId = null;          // the Short in Short mode
@@ -194,7 +245,10 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   let raf = 0;
   let showMain = true;       // the small main picture in Short mode
   let edge = null;           // 27 Nov: "start" / "end" - the edge last grabbed (← → move it)
-  let sspan = 6;             // the close-up: seconds across
+  let barView = null;        // 27 Nov: the one bar's view {id, lo, hi} (timeline seconds)
+  let followPick = false;    // Follow this person: the next click on the main picture picks them
+  let frameBusy = "";        // "Working out the Action shot..."
+  const AROUND = 60;         // s shown either side of the Short when the bar fits
   let ioPreview = false;     // Play the cut: 1 s before and after too
   let playFrom = null, playLoop = false;   // Play the cut loops; Play around plays once
   const fpsNow = () => (typeof projectFps === "function" ? projectFps() : +project.fps || 30) || 30;
@@ -254,12 +308,13 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
           `<span class="sbt-len">${SBX.length(b.dur)}</span></div>` +
           (on ? `<div class="sbt-grid">` +
             preciseHtml(b) +
-            `<label class="wide">Frame <span class="dim">(left … right)</span><input type="range" data-f="cropX" min="0" max="1" step="0.01" value="${b.cropX}"></label>` +
+            frameHtml(b) +
             `<label class="wide">On-screen text <span class="dim">(this Short only)</span><input data-f="text" value="${escapeHtmlSb(b.text)}" maxlength="80" placeholder="e.g. BUSTED"></label>` +
             `<label>Speed<select data-f="speed">${SBX.SPEEDS.map((s) => `<option value="${s}" ${s === b.speed ? "selected" : ""}>${s}×</option>`).join("")}</select></label>` +
             `<label>Look<select data-f="look">${Object.entries(SBX.LOOKS).map(([k, [n]]) => `<option value="${k}" ${k === b.look ? "selected" : ""}>${n}</option>`).join("")}</select></label></div>` : "") +
           `<div class="sbt-acts">` + (busy ? `<span class="sb-busy">Making…</span>` :
-            `<button type="button" class="btn tiny" data-sbt="preview" title="Loops just this Short until you press Stop${on && ioPreview ? " (with 1 s before and after: In/out preview)" : ""}">${on && playEnd != null && state.playing && playLoop ? "■ Stop" : "▶ Play the cut"}</button>` +
+            `<button type="button" class="btn tiny" data-sbt="preview" title="Loops just this Short - Pause / Resume (or the space bar); Stop ends it${on && ioPreview ? " (with 1 s before and after: In/out preview)" : ""}">${playLabel(on)}</button>` +
+            (on && playEnd != null ? `<button type="button" class="btn tiny" data-sbt="stop" title="Stop: back to the start">■ Stop</button>` : "") +
             `<button type="button" class="btn tiny accent" data-sbt="export" title="Make it vertical and open its Ready to post page (in the background)">Export to Ready to post</button>` +
             `<button type="button" class="btn tiny" data-sbt="download">Download</button>`) +
             `<button type="button" class="btn tiny sb-bin" data-sbt="delete" title="${escapeHtmlSb(SBX.deleteText(i + 1, b.name))}">🗑 Delete</button></div></div>`;
@@ -272,9 +327,16 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       const all = boxesNow(), i = all.findIndex((y) => y.id === row.dataset.id), b = all[i];
       if (!b) return;
       if (act === "preview") { selectShort(b.id); playShort(); }
+      else if (act === "stop") { stopShortPlay(true); renderShortsPage(); }
+      else if (act === "bzin" || act === "bzout") zoomBar(b, act === "bzin" ? 0.5 : 2);
+      else if (act === "bfit") { barView = null; paintBar(); }
+      else if (act === "fmode") setFrameMode(b.id, x.dataset.v);
+      else if (act === "fkey") addKey(b.id, false);
+      else if (act === "fback") addKey(b.id, true);
+      else if (act === "fclear") update((y) => { y.frame = { ...(normFrame(y.frame) || { mode: "still", path: [] }), keys: [] }; renderShortsPage(); sendList(); });
+      else if (act === "fdel") update((y) => { const f = normFrame(y.frame); f.keys.splice(+x.dataset.v, 1); y.frame = f; renderShortsPage(); sendList(); });
       else if (act === "step") { const [w, d] = x.dataset.v.split(":"); stepEdge(b.id, w, d); }
       else if (act === "around") playAround(b.id, x.dataset.v);
-      else if (act === "zin" || act === "zout") { sspan = act === "zin" ? Math.max(1, sspan / 2) : Math.min(96, sspan * 2); renderShortsPage(); }
       else if (act === "export") createShortFromBox(b, labelOf(b, i));
       else if (act === "download") downloadShort(b, labelOf(b, i));
       else if (act === "delete") askDelete(b.id);
@@ -285,9 +347,9 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     }));
     const io = page.querySelector("[data-io]");
     if (io) io.onchange = () => { ioPreview = io.checked; };
-    page.querySelectorAll("[data-edge]").forEach((r) => r.addEventListener("pointerdown", () => { if (edge !== r.dataset.edge) { edge = r.dataset.edge; paintClose(); markEdgeRows(); } }));
-    wireClose(page.querySelector(".sbt-close"));
-    paintClose();
+    page.querySelectorAll("[data-edge]").forEach((r) => r.addEventListener("pointerdown", () => { if (edge !== r.dataset.edge) { edge = r.dataset.edge; paintBar(); markEdgeRows(); } }));
+    wireBar(page.querySelector(".sbt-bar"));
+    paintBar();
     page.querySelectorAll("[data-f]").forEach((inp) => {
       const id = inp.closest(".sbt").dataset.id, f = inp.dataset.f;
       const commit = () => setField(id, f, inp.type === "checkbox" ? inp.checked : inp.value);
@@ -325,13 +387,14 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   function preciseHtml(b) {
     const fps = fpsNow();
     const row = (w, name, t) => `<div class="sbt-edge${edge === w ? " on" : ""}" data-edge="${w}"><label>${name}<input data-f="${w}" class="sbt-tc" value="${SBX.tc(t, fps)}" spellcheck="false" title="Type a time: h:mm:ss.ff (ff = the frame), then Enter"></label>` +
-      `<span class="sbt-steps">${STEPS.map(([d, l]) => `<button type="button" class="btn tiny" data-sbt="step" data-v="${w}:${d}" title="${d.includes("f") ? "One frame" + (d[0] === "-" ? " back" : " on") + " (← →)" : l + (Math.abs(+d) === 1 ? " (Shift + ← →)" : "")}">${l}</button>`).join("")}` +
-      `<button type="button" class="btn tiny" data-sbt="around" data-v="${w}" title="Plays 1 second before to 1 second after the ${name.toLowerCase()}: what is not in the Short shows as CUT OUT">Play around</button></span></div>`;
+      `<span class="sbt-steps">${STEPS.map(([d, l]) => `<button type="button" class="btn tiny" data-sbt="step" data-v="${w}:${d}" title="${d.includes("f") ? "One frame" + (d[0] === "-" ? " back" : " on") + " (← →)" : l + (Math.abs(+d) === 1 ? " (Shift + ← →)" : "")}">${l}</button>`).join("")}</span></div>`;
     return `<div class="sbt-precise wide">${row("start", "Start", b.start)}${row("end", "End", b.start + b.dur)}` +
       `<div class="sbt-lenrow">Length <b class="sbt-tclen">${SBX.tc(b.dur, fps)}</b><label class="sbt-io" title="Play the cut also plays 1 s before the start and 1 s after the end, shown as CUT OUT"><input type="checkbox" data-io ${ioPreview ? "checked" : ""}> In/out preview</label></div>` +
-      `<div class="sbt-close" title="Close-up of the edge you last grabbed: click or drag to put it on the exact frame">` +
-      `<div class="sbc-head"><b class="sbc-name"></b><span class="dim sbc-info"></span><button type="button" class="btn tiny" data-sbt="zin" title="Closer (fewer seconds across)">+</button><button type="button" class="btn tiny" data-sbt="zout" title="Wider (more seconds across)">−</button></div>` +
-      `<div class="sbc-body"><img class="sbc-pics" alt="" draggable="false"><canvas class="sbc-wave" height="40"></canvas><i class="sbc-dim"></i><i class="sbc-mark"></i></div></div></div>`;
+      `<div class="sbt-bar" title="Drag the two handles in or out. Click to jump there; drag the empty bar to move along. Mouse wheel: zoom (down to single frames); Shift + wheel: move along.">` +
+      `<div class="sbb-head"><span class="dim sbb-win"></span><button type="button" class="btn tiny" data-sbt="bzout" title="Zoom out: more around the Short">−</button><button type="button" class="btn tiny" data-sbt="bzin" title="Zoom in, down to single frames">+</button><button type="button" class="btn tiny" data-sbt="bfit" title="The whole Short and 60 s either side">Fit</button></div>` +
+      `<div class="sbb-body"><div class="sbb-thumbs"></div><canvas class="sbb-wave" height="40"></canvas><i class="sbb-dim l"></i><i class="sbb-dim r"></i>` +
+      `<span class="sbb-keys"></span><i class="sbb-h s" title="The start: drag it in or out"></i><i class="sbb-h e" title="The end: drag it in or out"></i><i class="sbb-play"></i></div>` +
+      `<div class="dim sbb-now"></div></div></div>`;
   }
   function markEdgeRows() {
     document.querySelectorAll("#shortsPage .sbt-edge").forEach((r) => r.classList.toggle("on", r.dataset.edge === edge));
@@ -350,7 +413,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     }
     if (edge && typeof setTime === "function") setTime(edge === "start" ? b.start : Math.max(b.start, b.start + b.dur - 1 / fps));
     markEdgeRows();
-    paintClose();
+    paintBar();
   }
   function stepEdge(id, w, d) {
     const all = boxesNow(), b = all.find((x) => x.id === id);
@@ -369,71 +432,201 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   }
   window.shortStepEdge = (w, d) => { if (selId) stepEdge(selId, w, d); };
 
-  /** The close-up: pictures (the Editor's own frame sheet of the file under the edge) and that file's waveform,
-   *  `sspan` seconds across, centred on the edge; dimmed on the side that is not in the Short. */
-  let closeWin = null;
-  function closeWindow(b) {
-    const t = edge === "end" ? b.start + b.dur : b.start;
-    const src = SBX.sourceAt(project, edge === "end" ? Math.max(0, t - 1e-3) : t);
-    if (!src) return { t, src: null };
-    const t0 = Math.max(src.from, t - sspan / 2), t1 = Math.min(src.to, t0 + sspan);
-    return { t, src, t0, t1 };
+  /* -- 27 Nov (Steve): ONE bar - pictures + the sound, the Short and 60 s either side (dimmed outside), both
+     handles drag in or out, zoom with the wheel / + / - down to single frames, Fit ------------------------------------ */
+  function fitView(b) {
+    const L = typeof projDur === "function" ? projDur() : b.start + b.dur + AROUND;
+    return { id: b.id, lo: Math.max(0, b.start - AROUND), hi: Math.min(Math.max(L, b.start + b.dur), b.start + b.dur + AROUND) };
   }
-  function paintClose() {
-    const [b] = current(), box = document.querySelector("#shortsPage .sbt.on .sbt-close");
+  function viewOf(b) {
+    if (!barView || barView.id !== b.id) barView = fitView(b);
+    return barView;
+  }
+  function setBarView(b, lo, hi) {
+    const L = typeof projDur === "function" ? projDur() : hi, fps = fpsNow();
+    const span = Math.max(12 / fps, Math.min(Math.max(L, 1), hi - lo));
+    lo = Math.max(0, Math.min(lo, Math.max(0, L - span)));
+    barView = { id: b.id, lo, hi: lo + span };
+    paintBar();
+  }
+  function zoomBar(b, f, at) {
+    const v = viewOf(b);
+    at = at ?? (edge === "end" ? b.start + b.dur : edge === "start" ? b.start : (v.lo + v.hi) / 2);
+    setBarView(b, at - (at - v.lo) * f, at - (at - v.lo) * f + (v.hi - v.lo) * f);
+  }
+  let barPicsKey = "";
+  function paintBar() {
+    const [b] = current(), box = document.querySelector("#shortsPage .sbt.on .sbt-bar");
     if (!box || !b) return;
-    if (!edge) { box.classList.add("idle"); box.querySelector(".sbc-name").textContent = "Close-up"; box.querySelector(".sbc-info").textContent = "grab the start or the end (here or on the band) to see that spot frame by frame"; return; }
-    box.classList.remove("idle");
-    const fps = fpsNow(), w = closeWindow(b);
-    box.querySelector(".sbc-name").textContent = edge === "start" ? "Start" : "End";
-    if (!w.src) { box.querySelector(".sbc-info").textContent = `${SBX.tc(w.t, fps)} · no footage under this edge`; return; }
-    // the window is only moved when the edge leaves its middle, so frame steps don't reload the pictures
-    if (!closeWin || closeWin.src.src !== w.src.src || closeWin.span !== sspan || closeWin.edge !== edge || w.t < closeWin.t0 + sspan * 0.2 && closeWin.t0 > w.src.from || w.t > closeWin.t1 - sspan * 0.2 && closeWin.t1 < w.src.to) closeWin = { ...w, span: sspan, edge };
-    const cw = closeWin, sp = cw.src.speed, a0 = cw.src.at + (cw.t0 - cw.t) * sp, a1 = cw.src.at + (cw.t1 - cw.t) * sp;
-    const img = box.querySelector(".sbc-pics"), url = `/api/frame?src=${encodeURIComponent(cw.src.src)}&frames=8&cols=8&from=${a0.toFixed(3)}&to=${a1.toFixed(3)}&w=120&q=6`;
-    if (img.dataset.url !== url) { img.dataset.url = url; img.src = url; }
-    const S = (x) => Math.max(0, Math.min(100, ((x - cw.t0) / (cw.t1 - cw.t0)) * 100));
-    box.querySelector(".sbc-mark").style.left = S(w.t) + "%";
-    const dim = box.querySelector(".sbc-dim");
-    if (edge === "start") { dim.style.left = "0"; dim.style.width = S(w.t) + "%"; } else { dim.style.left = S(w.t) + "%"; dim.style.width = (100 - S(w.t)) + "%"; }
-    box.querySelector(".sbc-info").textContent = `${SBX.tc(w.t, fps)} · ${(cw.t1 - cw.t0).toFixed(1)} s across · ${Math.round(fps * 100) / 100} fps`;
-    const c = box.querySelector(".sbc-wave"), W = c.clientWidth || 300; c.width = W;
+    const v = viewOf(b), fps = fpsNow(), span = v.hi - v.lo;
+    const X = (t) => (t - v.lo) / span * 100, s = b.start, e = b.start + b.dur;
+    box.querySelector(".sbb-dim.l").style.width = Math.max(0, Math.min(100, X(s))) + "%";
+    box.querySelector(".sbb-dim.r").style.left = Math.max(0, Math.min(100, X(e))) + "%";
+    box.querySelector(".sbb-dim.r").style.width = Math.max(0, 100 - Math.max(0, X(e))) + "%";
+    const hs = box.querySelector(".sbb-h.s"), he = box.querySelector(".sbb-h.e");
+    hs.style.left = X(s) + "%"; he.style.left = X(e) + "%";
+    hs.hidden = s < v.lo || s > v.hi; he.hidden = e < v.lo || e > v.hi;
+    hs.classList.toggle("on", edge === "start"); he.classList.toggle("on", edge === "end");
+    box.querySelector(".sbb-play").style.left = X(state.time) + "%";
+    const f = normFrame(b.frame);
+    box.querySelector(".sbb-keys").innerHTML = (f ? f.keys : []).map((k) => `<i class="sbb-key${k.back ? " back" : ""}" style="left:${X(s + k.t)}%"></i>`).join("");
+    box.querySelector(".sbb-win").textContent = `Showing ${SBX.tc(v.lo, fps)} to ${SBX.tc(v.hi, fps)} (${span >= 120 ? Math.round(span / 60) + " min" : span >= 2 ? span.toFixed(1) + " s" : Math.round(span * fps) + " frames"})`;
+    // pictures: the Editor's own frames of whatever is under each spot (a few per view, cached by the server)
+    const W = box.querySelector(".sbb-body").clientWidth || 300, n = Math.max(4, Math.min(16, Math.round(W / 90)));
+    const key = `${v.lo.toFixed(2)}|${v.hi.toFixed(2)}|${n}`;
+    if (key !== barPicsKey) {
+      barPicsKey = key;
+      box.querySelector(".sbb-thumbs").innerHTML = Array.from({ length: n }, (_, k) => {
+        const tt = v.lo + span * (k + 0.5) / n, src = SBX.sourceAt(project, tt);
+        return src ? `<img src="/api/frame?src=${encodeURIComponent(src.src)}&t=${src.at.toFixed(3)}&w=160&q=6" alt="" draggable="false">` : `<i class="sbb-none"></i>`;
+      }).join("");
+    }
+    // the sound of whatever is under each column
+    const c = box.querySelector(".sbb-wave"); c.width = W;
     const g = c.getContext("2d"), H = c.height;
-    g.clearRect(0, 0, W, H);
-    const pk = typeof wavePeaksFor === "function" ? wavePeaksFor(cw.src.clip) : null, per = typeof WAVE_PEAKS_PER_SEC === "number" ? WAVE_PEAKS_PER_SEC : 50;
-    if (pk && pk.length) {
-      g.fillStyle = "#B6F23A";
-      for (let x = 0; x < W; x++) {
-        const ta = a0 + (x / W) * (a1 - a0), tb = a0 + ((x + 1) / W) * (a1 - a0);
-        let v = 0; for (let k = Math.floor(ta * per); k <= Math.floor(tb * per) && k < pk.length; k++) if (k >= 0 && pk[k] > v) v = pk[k];
-        const bh = Math.max(1, Math.min(1, v) * (H - 2)); g.fillRect(x, (H - bh) / 2, 1, bh);
-      }
-    } else { g.fillStyle = "rgba(255,255,255,.4)"; g.font = "11px sans-serif"; g.fillText("the waveform shows once the Editor has read this file's sound", 6, H / 2 + 4); }
-    const pxf = W / ((cw.t1 - cw.t0) * fps);
-    if (pxf >= 5) { g.fillStyle = "rgba(255,255,255,.35)"; for (let f = Math.ceil(cw.t0 * fps); f / fps <= cw.t1; f++) g.fillRect(((f / fps - cw.t0) / (cw.t1 - cw.t0)) * W, 0, 1, 5); }
+    g.clearRect(0, 0, W, H); g.fillStyle = "#B6F23A";
+    const per = typeof WAVE_PEAKS_PER_SEC === "number" ? WAVE_PEAKS_PER_SEC : 50;
+    for (let x = 0; x < W; x++) {
+      const ta = v.lo + span * x / W, tb = v.lo + span * (x + 1) / W, src = SBX.sourceAt(project, ta);
+      const pk = src && typeof wavePeaksFor === "function" ? wavePeaksFor(src.clip) : null;
+      if (!pk) continue;
+      const a0 = src.at, a1 = src.at + (tb - ta) * src.speed;
+      let val = 0; for (let k = Math.floor(a0 * per); k <= Math.floor(a1 * per) && k < pk.length; k++) if (k >= 0 && pk[k] > val) val = pk[k];
+      const bh = Math.max(1, Math.min(1, val) * (H - 2)); g.fillRect(x, (H - bh) / 2, 1, bh);
+    }
+    if (W / (span * fps) >= 5) { g.fillStyle = "rgba(255,255,255,.35)"; for (let fr = Math.ceil(v.lo * fps); fr / fps <= v.hi; fr++) g.fillRect(((fr / fps - v.lo) / span) * W, 0, 1, 6); }
+    nowLine();
   }
-  function wireClose(box) {
+  function wireBar(box) {
     if (!box) return;
-    const body = box.querySelector(".sbc-body");
-    body.onpointerdown = (e) => {
-      const [b] = current();
-      if (!b || !edge || !closeWin) return;
-      e.preventDefault(); e.stopPropagation();
-      stopShortPlay();
-      const r = body.getBoundingClientRect(), cw = closeWin;
+    const body = box.querySelector(".sbb-body");
+    const T = (cx) => { const [b] = current(), v = viewOf(b), r = body.getBoundingClientRect(); return v.lo + Math.max(0, Math.min(1, (cx - r.left) / r.width)) * (v.hi - v.lo); };
+    body.onwheel = (e) => {
+      const [b] = current(); if (!b) return;
+      e.preventDefault();
+      const v = viewOf(b);
+      if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) { const d = (e.deltaX || e.deltaY) / (body.clientWidth || 300) * (v.hi - v.lo); setBarView(b, v.lo + d, v.hi + d); }
+      else zoomBar(b, e.deltaY < 0 ? 0.6 : 1 / 0.6, T(e.clientX));
+    };
+    const dragEdge = (w) => (e) => {
+      const [b] = current(); if (!b) return;
+      e.preventDefault(); e.stopPropagation(); stopShortPlay();
+      edge = w; markEdgeRows();
       if (typeof pushUndo === "function") pushUndo();
-      const at = (ev) => cw.t0 + Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)) * (cw.t1 - cw.t0);
-      const move = (ev) => update((x) => { Object.assign(x, SBX.moveEdge(x, edge, at(ev), typeof projDur === "function" ? projDur() : 0, fpsNow())); showEdge(x); paintShortBoxes(true); });
-      move(e);
+      const move = (ev) => update((x) => { Object.assign(x, SBX.moveEdge(x, w, T(ev.clientX), typeof projDur === "function" ? projDur() : 0, fpsNow())); showEdge(x); paintShortBoxes(true); });
       const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); sendList(); };
       window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
     };
+    box.querySelector(".sbb-h.s").onpointerdown = dragEdge("start");
+    box.querySelector(".sbb-h.e").onpointerdown = dragEdge("end");
+    body.onpointerdown = (e) => {
+      const [b] = current(); if (!b || e.target.classList.contains("sbb-h")) return;
+      const x0 = e.clientX, v0 = { ...viewOf(b) }; let panned = false;
+      const move = (ev) => { const dx = ev.clientX - x0; if (Math.abs(dx) > 4) panned = true; if (panned) { const d = -dx / (body.clientWidth || 300) * (v0.hi - v0.lo); setBarView(b, v0.lo + d, v0.hi + d); } };
+      const up = (ev) => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); if (!panned && typeof setTime === "function") { setTime(T(ev.clientX)); paintBar(); } };
+      window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+    };
   }
+  window.addEventListener("resize", () => { barPicsKey = ""; if (selId) paintBar(); });
+
+  /* -- 27 Nov: what is playing, Pause / Resume / Stop --------------------------------------------------------------- */
+  function playLabel(on) {
+    if (!on || playEnd == null) return "▶ Play the cut";
+    return state.playing ? "❚❚ Pause" : "▶ Resume";
+  }
+  function nowLine() {
+    const el = document.querySelector("#shortsPage .sbt.on .sbb-now"), st = document.querySelector("#shortStage .ss-sub");
+    const [b] = current();
+    let txt = "";
+    if (b && playEnd != null) {
+      const fps = fpsNow(), t = state.time;
+      const where = t < b.start - 0.01 ? "the 1 s before the start (CUT OUT)" : t > b.start + b.dur + 0.01 ? "the 1 s after the end (CUT OUT)" : "the cut";
+      txt = `${state.playing ? "Playing" : "Paused"}: ${where} - ${SBX.tc(Math.max(0, t - b.start), fps)} of ${SBX.tc(b.dur, fps)}${playLoop ? " (loops)" : ""}`;
+    }
+    if (el) el.textContent = txt;
+    if (st) st.textContent = txt || "Changes here only change this Short. Main goes back to your video.";
+  }
+
+  /* -- 27 Nov (Steve): the frame - Still, Action shot, Follow this person, keyframes ------------------------------------ */
+  function frameHtml(b) {
+    const f = normFrame(b.frame) || { mode: "still", path: [], keys: [] }, fps = fpsNow();
+    const btn = (m, label, tip) => `<button type="button" class="btn tiny ${f.mode === m ? "accent" : ""}" data-sbt="fmode" data-v="${m}" title="${tip}">${label}</button>`;
+    const note = frameBusy || (followPick ? "Click the person (or car, animal) in the main picture" :
+      f.mode === "action" ? `Action shot (${{ fight: "both fighters kept in", football: "follows the ball", other: "follows the main moving subject" }[f.kind] || "follows the action"})` :
+      f.mode === "follow" ? "Following who you clicked" : "Still: drag the picture to place it");
+    return `<div class="sbt-frame wide"><div class="sbf-row"><b>Frame</b>${btn("still", "Still", "One position: drag the picture (or the slider)")}` +
+      btn("action", "Action shot", "Follows the action automatically (fights: both fighters; football: the ball; else the main moving subject) - worked out on this PC, no AI cost") +
+      btn("follow", "Follow this person", "Click a person (or a car, an animal) in the main picture: the frame locks onto them and follows them") + `</div>` +
+      `<div class="dim sbf-note">${escapeHtmlSb(note)}</div>` +
+      (f.mode === "still" ? `<label class="wide">Position <span class="dim">(left … right)</span><input type="range" data-f="cropX" min="0" max="1" step="0.01" value="${b.cropX}"></label>` : "") +
+      `<div class="sbf-row"><button type="button" class="btn tiny" data-sbt="fkey" title="A keyframe here (the playhead): the frame where it is now - drag the picture to move it">+ Keyframe here</button>` +
+      (f.mode !== "still" ? `<button type="button" class="btn tiny" data-sbt="fback" title="From here the frame glides back to the Action shot / Follow path">Back to auto here</button>` : "") +
+      (f.keys.length ? `<button type="button" class="btn tiny" data-sbt="fclear">Clear keyframes</button>` : "") + `</div>` +
+      (f.keys.length ? `<div class="sbf-keys">${f.keys.map((k, i) => `<span class="sbf-key">${SBX.tc(k.t, fps)} · ${k.back ? "back to auto" : Math.round(k.x * 100) + "%"} <button type="button" class="btn tiny ghost" data-sbt="fdel" data-v="${i}" title="Remove this keyframe">✕</button></span>`).join("")}</div>` : "") +
+      `</div>`;
+  }
+  /** The window's position (0..1) now, for the preview: the frame rule at the Short's own time. */
+  function cropNow(b) {
+    return SBX.frameAt(b, Math.max(0, Math.min(b.dur, state.time - b.start)));
+  }
+  async function setFrameMode(id, mode) {
+    const b = boxesNow().find((x) => x.id === id);
+    if (!b) return;
+    followPick = false;
+    if (mode === "still") {
+      update((x) => { x.frame = { ...(normFrame(x.frame) || { path: [], keys: [] }), mode: "still" }; });
+      renderShortsPage(); sendList(); return;
+    }
+    if (mode === "follow") {
+      followPick = true; showMain = true; drawStage(); renderShortsPage();
+      toast("Click the person (or car, animal) to follow in the small main picture");
+      return;
+    }
+    await askFrame(b, "action", null);
+  }
+  async function askFrame(b, mode, click) {
+    if (!(typeof inCreateSummat === "function" && inCreateSummat())) return toast("The Action shot and Follow are worked out by Create Summat: open the Editor from there");
+    const f = SBX.footage(project, b);
+    if (!f.pieces.length) return toast("There is no video under this Short to look at");
+    frameBusy = mode === "follow" ? "Following them through the Short…" : "Working out the Action shot…";
+    renderShortsPage();
+    const r = await askHost("short-frame", { project: project.name || "", fps: fpsNow(), box: { id: b.id, start: b.start, dur: b.dur },
+      pieces: f.pieces.map((p) => ({ file: p.file, in: p.in, out: p.out })), mode, click }, 600000);
+    frameBusy = "";
+    if (!r || r.error || !Array.isArray(r.path)) { toast((r && r.error) || "The frame couldn't be worked out"); renderShortsPage(); return; }
+    update((x) => { const old = normFrame(x.frame); x.frame = normFrame({ mode, path: r.path, keys: old ? old.keys : [], kind: r.kind || "" }); });
+    if (typeof pushUndo === "function") pushUndo();
+    renderShortsPage(); sendList();
+    toast(mode === "follow" ? "Following them: Play the cut to see it. Drag the picture to correct a moment (it adds a keyframe)." : "Action shot ready: Play the cut to see it.");
+  }
+  function addKey(id, back) {
+    const b = boxesNow().find((x) => x.id === id);
+    if (!b) return;
+    const tt = +Math.max(0, Math.min(b.dur, state.time - b.start)).toFixed(3);
+    update((x) => {
+      const f = normFrame(x.frame) || { mode: "still", path: [], keys: [] };
+      const near = f.keys.findIndex((k) => Math.abs(k.t - tt) < 0.2);
+      const key = { t: tt, x: back ? 0.5 : SBX.frameAt(x, tt), back: !!back };
+      if (near >= 0) f.keys[near] = key; else f.keys.push(key);
+      x.frame = normFrame(f);
+    });
+    renderShortsPage(); sendList();
+  }
+  /** Dragging the picture with a path or keyframes: a keyframe at the playhead (moved if one is close). */
+  function dragKey(b, crop) {
+    const tt = +Math.max(0, Math.min(b.dur, state.time - b.start)).toFixed(3);
+    const f = normFrame(b.frame) || { mode: "still", path: [], keys: [] };
+    const near = f.keys.findIndex((k) => Math.abs(k.t - tt) < 0.2);
+    const key = { t: tt, x: Math.min(1, Math.max(0, crop)), back: false };
+    if (near >= 0) f.keys[near] = key; else f.keys.push(key);
+    b.frame = normFrame(f);
+  }
+
   function playAround(id, w) {
     const b = boxesNow().find((x) => x.id === id);
     if (!b) return;
     if (selId !== id) selectShort(id);
-    edge = w; markEdgeRows(); paintClose();
+    edge = w; markEdgeRows(); paintBar();
     const t = w === "start" ? b.start : b.start + b.dur;
     startRange(Math.max(0, t - 1), t + 1, false);
   }
@@ -473,7 +666,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   /* -- Short mode: the monitor shows the Short, edits go to it only --------------------------------------------------- */
   function selectShort(id) {
     if (!boxesNow().some((b) => b.id === id)) return;
-    if (selId !== id) { stopShortPlay(); selId = id; edge = null; closeWin = null; }
+    if (selId !== id) { stopShortPlay(); selId = id; edge = null; barView = null; barPicsKey = ""; followPick = false; }
     if (typeof setSelection === "function" && state.selIds && state.selIds.size) setSelection([]);   // Delete never hits a clip now
     document.body.classList.add("short-mode");
     syncModeSwitch();
@@ -488,7 +681,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   function leaveShortMode() {
     if (!selId) return;
     stopShortPlay();
-    selId = null; edge = null; closeWin = null;
+    selId = null; edge = null; barView = null; barPicsKey = ""; followPick = false;
     document.body.classList.remove("short-mode");
     document.getElementById("shortStage")?.remove();
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
@@ -534,16 +727,21 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   function playShort() {
     const [b] = current();
     if (!b) return;
-    if (playEnd != null && state.playing) { stopShortPlay(); renderShortsPage(); return; }
+    if (playEnd != null) {                       // 27 Nov (Steve): Pause / Resume - the loop is kept until Stop
+      if (state.playing) pause(); else play();
+      drawStageButtons(); renderShortsPage(); return;
+    }
     const end = typeof projDur === "function" ? projDur() : 0;
     startRange(ioPreview ? Math.max(0, b.start - 1) : b.start, ioPreview ? (end > 0 ? Math.min(end, b.start + b.dur + 1) : b.start + b.dur + 1) : b.start + b.dur, true);
   }
   window.playShort = playShort;
-  function stopShortPlay() {
+  function stopShortPlay(toStart) {
+    const from = playFrom;
     if (playEnd != null && state.playing && typeof pause === "function") pause();
     if (playRate0 != null) { state.previewRate = playRate0; playRate0 = null; }
     playEnd = null; playFrom = null; playLoop = false;
-    drawStageButtons();
+    if (toStart && from != null && typeof setTime === "function") setTime(from);
+    drawStageButtons(); nowLine();
   }
 
   /** The Short stage: over the monitor's own area (never resizing anything), the 9:16 Short fitted to its height,
@@ -560,10 +758,12 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       st.innerHTML = `<div class="ss-banner"><b class="ss-editing"></b><span class="ss-sub">Changes here only change this Short. Main goes back to your video.</span></div>` +
         `<div class="ss-main" title="Your video: drag the green box to choose what the Short shows"><canvas id="ssMain" width="320" height="180"></canvas></div>` +
         `<canvas id="shortPreview" width="540" height="960" title="This Short as it will look (9:16). Drag it to move the viewing box."></canvas>` +
-        `<div class="ss-tools"><button type="button" class="btn tiny accent" id="ssPlay">▶ Play Short</button>` +
+        `<div class="ss-tools"><button type="button" class="btn tiny accent" id="ssPlay" title="Play the cut / Pause / Resume (space bar)">▶ Play the cut</button>` +
+        `<button type="button" class="btn tiny" id="ssStop" title="Stop: back to the start" hidden>■ Stop</button>` +
         `<button type="button" class="btn tiny" id="ssMainToggle"></button><button type="button" class="btn tiny" id="ssDone">Main</button></div>`;
       host.appendChild(st);
       st.querySelector("#ssPlay").onclick = playShort;
+      st.querySelector("#ssStop").onclick = () => { stopShortPlay(true); renderShortsPage(); };
       st.querySelector("#ssDone").onclick = leaveShortMode;
       st.querySelector("#ssMainToggle").onclick = () => { showMain = !showMain; try { localStorage.setItem("fc.shortShowMain", showMain ? "1" : "0"); } catch { /* */ } drawStage(); };
       wireDrag(st.querySelector("#ssMain"), "main");
@@ -577,7 +777,9 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   }
   function drawStageButtons() {
     const btn = document.getElementById("ssPlay");
-    if (btn) btn.textContent = playEnd != null && state.playing ? "■ Stop" : "▶ Play the cut";
+    if (btn) btn.textContent = playLabel(true);
+    const stop = document.getElementById("ssStop");
+    if (stop) stop.hidden = playEnd == null;
   }
   /** Sizes from the monitor area itself: the 9:16 preview as tall as fits, the main picture 30 % of the width. */
   function fitStage() {
@@ -602,11 +804,19 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       try { cv.setPointerCapture(e.pointerId); } catch { /* */ }
       const [b0] = current(), src = els.preview;
       if (!b0 || !src || !src.width) return;
-      const x0 = e.clientX, c0 = b0.cropX;
+      if (followPick && where === "main") {                // Follow this person: this click picks them
+        const r = cv.getBoundingClientRect();
+        followPick = false;
+        askFrame(b0, "follow", { t: +Math.max(0, Math.min(b0.dur, state.time - b0.start)).toFixed(3),
+          x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) });
+        return;
+      }
+      const f0 = normFrame(b0.frame), keyed = !!(f0 && (f0.mode !== "still" || f0.keys.length));
+      const x0 = e.clientX, c0 = keyed ? cropNow(b0) : b0.cropX;
       const w = SBX.window916(src.width, src.height, c0);
       // screen px per picture px: the main picture shows the whole width; the Short preview shows the box's width
       const pxPer = where === "main" ? cv.clientWidth / src.width : cv.clientWidth / w.w;
-      cv.onpointermove = (m) => update((b) => { b.cropX = SBX.dragCrop(c0, m.clientX - x0, pxPer, src.width, src.height); });
+      cv.onpointermove = (m) => update((b) => { const c = SBX.dragCrop(c0, m.clientX - x0, pxPer, src.width, src.height); if (keyed) dragKey(b, c); else b.cropX = c; });
       cv.onpointerup = () => { cv.onpointermove = null; sendList(); renderShortsPage(); };
     });
   }
@@ -617,15 +827,20 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     const [b] = current();
     if (!b) return;
     if (playEnd != null) {
-      if (!state.playing) { stopShortPlay(); renderShortsPage(); }
+      if (!state.playing) { /* paused: the loop waits for Resume (or Stop) */ }
       else if (state.time >= playEnd - 0.01) {
         if (playLoop && playFrom != null) { const f = playFrom; pause(); setTime(f); play(); }   // Play the cut: again
         else { stopShortPlay(); renderShortsPage(); }
       }
     }
     const src = els.preview, cv = document.getElementById("shortPreview"), mc = document.getElementById("ssMain");
+    if (playEnd != null || state.playing) {               // the bar's playhead and the line saying what plays
+      const bar = document.querySelector("#shortsPage .sbt.on .sbb-play"), v = viewOf(b);
+      if (bar) bar.style.left = ((state.time - v.lo) / (v.hi - v.lo) * 100) + "%";
+      nowLine(); drawStageButtons();
+    }
     if (src && src.width && src.height) {
-      const w = SBX.window916(src.width, src.height, b.cropX);
+      const w = SBX.window916(src.width, src.height, cropNow(b));      // 27 Nov: the frame rule (path + keyframes)
       if (cv) {
         const g = cv.getContext("2d");
         g.filter = (SBX.LOOKS[b.look] || SBX.LOOKS.none)[1];
@@ -666,10 +881,13 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   window.addEventListener("keydown", (e) => {
     if (!selId) return;
     const typing = typeof isTypingTarget === "function" && isTypingTarget(document.activeElement);
-    if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); if (edge) { edge = null; markEdgeRows(); paintClose(); } else leaveShortMode(); }
+    if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); if (edge) { edge = null; markEdgeRows(); paintBar(); } else leaveShortMode(); }
     else if (!typing && edge && (e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.altKey && !e.ctrlKey && !e.metaKey) {
       e.preventDefault(); e.stopImmediatePropagation();               // 27 Nov: the grabbed edge, a frame (Shift: 1 s)
       stepEdge(selId, edge, (e.key === "ArrowLeft" ? "-" : "") + (e.shiftKey ? "1" : "f"));
+    }
+    else if (!typing && e.key === " " && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault(); e.stopImmediatePropagation(); playShort();  // 27 Nov (Steve): space = Play the cut / Pause / Resume
     }
     else if (!typing && (e.key === "Delete" || e.key === "Backspace") && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault(); e.stopImmediatePropagation(); askDelete(selId);
@@ -706,11 +924,13 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
 
   /* -- Create Summat: the ticked (accepted) Shorts (Library > Shorts), made / removed there ------------------------ */
   const extras = (b) => ({ text: b.text || "", speed: b.speed || 1, look: b.look || "none" });
+  /** 27 Nov: what the export needs to frame it exactly as the preview: the path and the keyframes (null: a still). */
+  const frameOut = (b) => { const f = normFrame(b.frame); return f && ((f.mode !== "still" && f.path.length) || f.keys.length) ? { path: f.mode !== "still" ? f.path : [], keys: f.keys } : null; };
   let sentSig = null;
   function sendList(force) {
     if (!(typeof inCreateSummat === "function" && inCreateSummat())) return;
     const fps = typeof projectFps === "function" ? projectFps() : project.fps || 30;
-    const shorts = boxesNow().map((b, i) => [b, i]).filter(([b]) => b.accepted).map(([b, i]) => ({ id: b.id, name: labelOf(b, i), start: b.start, dur: b.dur, cropX: b.cropX,
+    const shorts = boxesNow().map((b, i) => [b, i]).filter(([b]) => b.accepted).map(([b, i]) => ({ id: b.id, name: labelOf(b, i), start: b.start, dur: b.dur, cropX: b.cropX, frame: frameOut(b),
       ...extras(b), pieces: SBX.footage(project, b).pieces.map((p) => ({ file: p.file, in: p.in, out: p.out })) }));
     const sig = JSON.stringify([project.name || "", shorts]);
     if (!force && sig === sentSig) return;
@@ -765,7 +985,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
         el.setPointerCapture(e.pointerId);
         const x0 = e.clientX, s0 = b.start, d0 = b.dur, end = typeof projDur === "function" ? projDur() : 0;
         let moved = false;
-        if (mode !== "move" && b.id === selId) { edge = mode === "l" ? "start" : "end"; markEdgeRows(); paintClose(); }
+        if (mode !== "move" && b.id === selId) { edge = mode === "l" ? "start" : "end"; markEdgeRows(); paintBar(); }
         el.onpointermove = (m) => {
           if (!moved && Math.abs(m.clientX - x0) < 3) return;         // a click, not a drag (yet)
           const dt = (m.clientX - x0) / state.pps;
@@ -811,7 +1031,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     if (f.extra) notes.push(`${f.extra} title${f.extra > 1 ? "s / effects" : " / effect"} under it ${f.extra > 1 ? "are" : "is"} not in the Short (only the footage, plus the Short's own text and look)`);
     if (f.slowed) notes.push("a sped-up or slowed clip plays at the Short's own speed");
     hostWindow().postMessage({ source: "fablecut", type: "make-short", project: project.name || "", name: b.name || label,
-      box: { id: b.id, start: b.start, dur: b.dur }, crop_x: SBX.cropOf(b), ...extras(b), pieces: f.pieces.map((p) => ({ file: p.file, in: p.in, out: p.out })),
+      box: { id: b.id, start: b.start, dur: b.dur }, crop_x: SBX.cropOf(b), frame: frameOut(b), ...extras(b), pieces: f.pieces.map((p) => ({ file: p.file, in: p.in, out: p.out })),
       fps: typeof projectFps === "function" ? projectFps() : project.fps || 30, notes, quiet: !!opt.quiet,
       download: !!opt.download, copy_to: opt.folder || "" }, "*");
     making.set(b.id, "making");
