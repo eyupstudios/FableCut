@@ -250,7 +250,8 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   let frameBusy = "";        // "Working out the Action shot..."
   const AROUND = 60;         // s shown either side of the Short when the bar fits
   let ioPreview = false;     // Play the cut: 1 s before and after too
-  let playFrom = null, playLoop = false;   // Play the cut loops; Play around plays once
+  let playFrom = null, playLoop = false;   // the range playing loops (Loop ticked); Play around plays once
+  let shortLoop = false;     // 28 Nov (Steve): Play plays the Short ONCE (start to end) - Loop is off by default
   const fpsNow = () => (typeof projectFps === "function" ? projectFps() : +project.fps || 30) || 30;
   const STEPS = [["-60", "−1 min"], ["-1", "−1 s"], ["-f", "◀ frame"], ["f", "frame ▶"], ["1", "+1 s"], ["60", "+1 min"]];
   try { showMain = localStorage.getItem("fc.shortShowMain") !== "0"; } catch { /* only a remembered choice */ }
@@ -313,7 +314,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
             `<label>Speed<select data-f="speed">${SBX.SPEEDS.map((s) => `<option value="${s}" ${s === b.speed ? "selected" : ""}>${s}×</option>`).join("")}</select></label>` +
             `<label>Look<select data-f="look">${Object.entries(SBX.LOOKS).map(([k, [n]]) => `<option value="${k}" ${k === b.look ? "selected" : ""}>${n}</option>`).join("")}</select></label></div>` : "") +
           `<div class="sbt-acts">` + (busy ? `<span class="sb-busy">Making…</span>` :
-            `<button type="button" class="btn tiny" data-sbt="preview" title="Loops just this Short - Pause / Resume (or the space bar); Stop ends it${on && ioPreview ? " (with 1 s before and after: In/out preview)" : ""}">${playLabel(on)}</button>` +
+            `<button type="button" class="btn tiny accent" data-sbt="preview" title="Plays just this Short, from its start to its end - Pause / Resume (or the space bar)${on && ioPreview ? " (with 1 s before and after: In/out preview)" : ""}">${playLabel(on)}</button>` +
             (on && playEnd != null ? `<button type="button" class="btn tiny" data-sbt="stop" title="Stop: back to the start">■ Stop</button>` : "") +
             `<button type="button" class="btn tiny accent" data-sbt="export" title="Make it vertical and open its Ready to post page (in the background)">Export to Ready to post</button>` +
             `<button type="button" class="btn tiny" data-sbt="download">Download</button>`) +
@@ -347,6 +348,8 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     }));
     const io = page.querySelector("[data-io]");
     if (io) io.onchange = () => { ioPreview = io.checked; };
+    const lp = page.querySelector(".sbt.on [data-loop]");
+    if (lp) lp.onchange = () => { shortLoop = lp.checked; if (playEnd != null && playFrom != null) playLoop = shortLoop; };
     page.querySelectorAll("[data-edge]").forEach((r) => r.addEventListener("pointerdown", () => { if (edge !== r.dataset.edge) { edge = r.dataset.edge; paintBar(); markEdgeRows(); } }));
     wireBar(page.querySelector(".sbt-bar"));
     paintBar();
@@ -389,7 +392,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     const row = (w, name, t) => `<div class="sbt-edge${edge === w ? " on" : ""}" data-edge="${w}"><label>${name}<input data-f="${w}" class="sbt-tc" value="${SBX.tc(t, fps)}" spellcheck="false" title="Type a time: h:mm:ss.ff (ff = the frame), then Enter"></label>` +
       `<span class="sbt-steps">${STEPS.map(([d, l]) => `<button type="button" class="btn tiny" data-sbt="step" data-v="${w}:${d}" title="${d.includes("f") ? "One frame" + (d[0] === "-" ? " back" : " on") + " (← →)" : l + (Math.abs(+d) === 1 ? " (Shift + ← →)" : "")}">${l}</button>`).join("")}</span></div>`;
     return `<div class="sbt-precise wide">${row("start", "Start", b.start)}${row("end", "End", b.start + b.dur)}` +
-      `<div class="sbt-lenrow">Length <b class="sbt-tclen">${SBX.tc(b.dur, fps)}</b><label class="sbt-io" title="Play the cut also plays 1 s before the start and 1 s after the end, shown as CUT OUT"><input type="checkbox" data-io ${ioPreview ? "checked" : ""}> In/out preview</label></div>` +
+      `<div class="sbt-lenrow">Length <b class="sbt-tclen">${SBX.tc(b.dur, fps)}</b><label class="sbt-io" title="Play the cut also plays 1 s before the start and 1 s after the end, shown as CUT OUT"><input type="checkbox" data-io ${ioPreview ? "checked" : ""}> In/out preview</label><label class="sbt-io" title="Plays the Short round and round until you press Pause"><input type="checkbox" data-loop ${shortLoop ? "checked" : ""}> Loop</label></div>` +
       `<div class="sbt-bar" title="Drag the two handles in or out. Click to jump there; drag the empty bar to move along. Mouse wheel: zoom (down to single frames); Shift + wheel: move along.">` +
       `<div class="sbb-head"><span class="dim sbb-win"></span><button type="button" class="btn tiny" data-sbt="bzout" title="Zoom out: more around the Short">−</button><button type="button" class="btn tiny" data-sbt="bzin" title="Zoom in, down to single frames">+</button><button type="button" class="btn tiny" data-sbt="bfit" title="The whole Short and 60 s either side">Fit</button></div>` +
       `<div class="sbb-body"><div class="sbb-thumbs"></div><canvas class="sbb-wave" height="40"></canvas><i class="sbb-dim l"></i><i class="sbb-dim r"></i>` +
@@ -531,7 +534,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
 
   /* -- 27 Nov: what is playing, Pause / Resume / Stop --------------------------------------------------------------- */
   function playLabel(on) {
-    if (!on || playEnd == null) return "▶ Play the cut";
+    if (!on || playEnd == null) return "▶ Play";
     return state.playing ? "❚❚ Pause" : "▶ Resume";
   }
   function nowLine() {
@@ -597,7 +600,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     update((x) => { const old = normFrame(x.frame); x.frame = normFrame({ mode, path: r.path, keys: old ? old.keys : [], kind: r.kind || "" }); });
     if (typeof pushUndo === "function") pushUndo();
     renderShortsPage(); sendList();
-    toast(mode === "follow" ? "Following them: Play the cut to see it. Drag the picture to correct a moment (it adds a keyframe)." : "Action shot ready: Play the cut to see it.");
+    toast(mode === "follow" ? "Following them: press Play to see it. Drag the picture to correct a moment (it adds a keyframe)." : "Action shot ready: press Play to see it.");
   }
   function addKey(id, back) {
     const b = boxesNow().find((x) => x.id === id);
@@ -722,7 +725,8 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     scheduleSave();
   }
 
-  /** Play the cut (27 Nov): loops just this Short until Stop (at its own speed); In/out preview adds 1 s before the
+  /** Play (28 Nov, Steve): plays just this Short once, from its start to its end, then stops (Loop: round again, at
+   *  its own speed); In/out preview adds 1 s before the
    *  start and 1 s after the end, shown as CUT OUT. */
   function playShort() {
     const [b] = current();
@@ -732,7 +736,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       drawStageButtons(); renderShortsPage(); return;
     }
     const end = typeof projDur === "function" ? projDur() : 0;
-    startRange(ioPreview ? Math.max(0, b.start - 1) : b.start, ioPreview ? (end > 0 ? Math.min(end, b.start + b.dur + 1) : b.start + b.dur + 1) : b.start + b.dur, true);
+    startRange(ioPreview ? Math.max(0, b.start - 1) : b.start, ioPreview ? (end > 0 ? Math.min(end, b.start + b.dur + 1) : b.start + b.dur + 1) : b.start + b.dur, shortLoop);
   }
   window.playShort = playShort;
   function stopShortPlay(toStart) {
@@ -758,7 +762,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       st.innerHTML = `<div class="ss-banner"><b class="ss-editing"></b><span class="ss-sub">Changes here only change this Short. Main goes back to your video.</span></div>` +
         `<div class="ss-main" title="Your video: drag the green box to choose what the Short shows"><canvas id="ssMain" width="320" height="180"></canvas></div>` +
         `<canvas id="shortPreview" width="540" height="960" title="This Short as it will look (9:16). Drag it to move the viewing box."></canvas>` +
-        `<div class="ss-tools"><button type="button" class="btn tiny accent" id="ssPlay" title="Play the cut / Pause / Resume (space bar)">▶ Play the cut</button>` +
+        `<div class="ss-tools"><button type="button" class="btn tiny accent" id="ssPlay" title="Plays just this Short, start to end / Pause / Resume (space bar)">▶ Play</button>` +
         `<button type="button" class="btn tiny" id="ssStop" title="Stop: back to the start" hidden>■ Stop</button>` +
         `<button type="button" class="btn tiny" id="ssMainToggle"></button><button type="button" class="btn tiny" id="ssDone">Main</button></div>`;
       host.appendChild(st);

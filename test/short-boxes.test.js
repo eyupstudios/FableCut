@@ -121,6 +121,12 @@ test("27 Nov: precise Short edges - h:mm:ss.ff, typed times, frame steps that ke
   for (const want of ['["-60", "−1 min"]', '["-f", "◀ frame"]', '["60", "+1 min"]', "Play the cut", "In/out preview", "sbt-bar",
                       "CUT OUT", "/api/frame?src=", "wavePeaksFor", 'e.key === "ArrowLeft"', "SBX.parseTc(v, fpsNow())", "playLoop"])
     assert.ok(src.includes(want), want);
+  // 28 Nov (Steve): Play plays the Short ONCE, start to end, and stops; Loop is a toggle, off by default
+  assert.ok(src.includes("let shortLoop = false;"), "Loop off by default");
+  assert.ok(src.includes("b.start + b.dur, shortLoop);"), "Play uses the Loop toggle, not always-loop");
+  assert.ok(src.includes('data-loop ${shortLoop ? "checked" : ""}'), "the Loop toggle is shown");
+  assert.ok(src.includes("else { stopShortPlay(); renderShortsPage(); }"), "stops at the end when Loop is off");
+  assert.ok(!src.includes(">▶ Play the cut</button>"), "one clear Play button");
 });
 // 27 Nov (Steve): ONE bar, Pause / Stop, and the frame (Still / Action shot / Follow this person / keyframes)
 test("the frame rule is exactly Create Summat's (reframe.path): the preview is what the export makes", () => {
